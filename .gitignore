@@ -1,0 +1,32 @@
+# Local GitHub Spec Kit scaffolding
+.specify/
+.cursor/
+specs/
+
+# Dependencies and Next.js build output
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Local environment and logs
+.env*
+!.env.dev
+*.log
+*.tsbuildinfo
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+
+# Next.js build output
+/.next/
+
+# package-lock.json
+package-lock.json
