@@ -15,6 +15,10 @@ export type InvestmentPhasingDto = {
 export type InvestmentCostItemDto = {
   cost_item_id: string
   name: string
+  /** Cost function this item belongs to (when list returns multi-function mines). */
+  function_master_id?: string | null
+  /** Ownership / Partial / Full FIT — isolates phase data per delivery type. */
+  function_investment_type_id?: string | null
   inputs: InvestmentInputDto[]
   amount_value: number
   /** API: calculated = Qrts × Unit Cost, manual = user-entered. Older rows may omit this. */
@@ -85,6 +89,9 @@ export type OverallCostItemDto = {
   unit_cost: number
   amount: number
   phases: Record<string, number>
+  /** Present when overall list returns FIT-scoped or mixed rows. */
+  function_investment_type_id?: string | null
+  cost_item_id?: string | null
 }
 
 export type OverallEntityDto = {

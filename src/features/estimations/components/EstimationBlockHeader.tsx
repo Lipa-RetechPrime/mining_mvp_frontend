@@ -36,7 +36,7 @@ export function EstimationBlockHeader({
           </span>
           <div className="min-w-0">
             <h2 className="text-[22px] font-semibold leading-snug tracking-tight text-[--color-portal-navy]">
-              Estimated Investment: {sectorName}
+              {sectorName}
             </h2>
             <p className="mt-0.5 text-sm font-normal text-[--text-color]">{siteSubtitle}</p>
           </div>

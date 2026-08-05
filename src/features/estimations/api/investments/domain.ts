@@ -82,6 +82,17 @@ export function isUuid(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean)
 }
 
+/** Strip `blk-`/`step-` prefixes and return a bare UUID, or null if invalid. */
+export function asUuidOrNull(id: string | null | undefined): string | null {
+  if (!id?.trim()) return null
+  const clean = id.trim().replace(/^(blk|step)-/, '')
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    clean,
+  )
+    ? clean
+    : null
+}
+
 /** Persist the same UUIDs we send to the API so later updates hit the same rows. */
 export function withApiIds(estimation: Estimation): Estimation {
   return {

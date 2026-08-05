@@ -46,15 +46,17 @@ After a user opens a project from the project listing, the product shall ask how
 
 `Requirement.md` target sections below remain the long-term vision; this section is the **near-term MVP increment**.
 
-### 3.2 Delivery-mode modal (after project listing)
+### 3.2 Delivery-mode modal (per cost function)
 
-- Selecting a project from the listing shall open a **modal** before the estimation or outsourcing workspace.
+- Opening a project from the listing lands on the mine workspace; **Ownership / Outsourcing is chosen per cost function**, not for the whole mine.
+- Selecting a Cost Function that has no saved delivery mode shall open a **modal** before showing Ownership estimation or Outsourcing configuration for that function.
 - MVP options:
   - **Ownership**
   - **Outsourcing**
 - Options shall be backed by a **delivery-type master** in the database (not permanently hard-coded as the only possible forever set).
-- Closing / canceling without a choice shall return the user to the project listing and shall not apply a mode.
-- Once a mode is saved for a project, reopen may skip the modal and go to the saved path; the user shall still be able to change mode later via an explicit action (with confirmation if switching would hide or orphan data).
+- Closing / canceling without a choice shall not apply a mode for that function; the user may pick another Cost Function.
+- Once a mode is saved for a **mine + function**, reopen of that function may skip the modal; the user shall still be able to change mode later via an explicit action (with confirmation if switching would hide or orphan data).
+- Different cost functions on the same mine may use different delivery modes.
 
 ### 3.3 Ownership path
 
@@ -85,17 +87,17 @@ After a user opens a project from the project listing, the product shall ask how
 
 ### 3.5 Persistence and extensibility
 
-- Persist delivery mode and outsourcing configuration against the project so values reload on return.
+- Persist delivery mode and outsourcing configuration against the **mine + cost function** so values reload when that function is selected again.
 - Validate required outsourcing fields before save.
 - Structure UI and data so delivery types, agent types, contribution models, and calculation rules can change later without redesigning the Ownership vs Outsourcing journey.
 - **Out of scope for this MVP increment unless separately specified:** full outsourcing financial calculation engine, overall-table formula changes, and Excel layout changes for outsourcing outcomes.
 
 ### 3.6 Active-phase acceptance (MVP increment)
 
-1. Project open from listing shows delivery-mode modal when no mode is saved.
-2. Ownership routes to current create/edit cost-item experience correctly.
-3. Outsourcing offers Partial (External Agent) and Full (Flat rate) with the inputs above.
-4. Saved mode and outsourcing inputs restore on reopen.
+1. Project open from listing goes to the mine workspace; Cost Function selection shows delivery-mode modal when no mode is saved for that function.
+2. Ownership for a function routes to current create/edit cost-item experience correctly.
+3. Outsourcing for a function offers Partial (External Agent) and Full (Flat rate) with the inputs above.
+4. Saved mode and outsourcing inputs restore when reopening the same function.
 5. Masters / catalogs allow additional options later without a new top-level journey.
 6. Ownership cost-item smoke paths remain green.
 

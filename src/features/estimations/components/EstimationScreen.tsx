@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/shared/components/ui/Button";
 import { MaterialIcon } from "@/shared/components/ui/MaterialIcon";
 import { Modal } from "@/shared/components/ui/Modal";
 
-import { getEntities, SECTOR_CATALOG } from "../api/master";
+import {
+  getEntities,
+  getMineWiseFunctionList,
+  type MineFunction,
+} from "../api/master";
 import {
   useEstimationDispatch,
   useEstimationState,
@@ -15,15 +19,26 @@ import {
 import { useEstimationList } from "../hooks/useLoadEstimation";
 import { useSubmitEstimation } from "../hooks/useSubmitEstimation";
 import { EMPTY_ESTIMATION } from "../model/estimation-slice";
-import type { PhaseTypeMaster } from "../types/estimation";
+import type { PhaseTypeMaster, Sector } from "../types/estimation";
 import { createEmptyEstimation } from "../utils/factories";
 import { CostItemsTable } from "./CostItemsTable";
 import { EmptyEstimationState } from "./EmptyEstimationState";
 import { EstimationBlockView } from "./EstimationBlockView";
+import {
+  isAdhocOutsourcing,
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  OutsourcingPartialProvider,
+  type OutsourcingContributionSettings,
+} from "@/features/projects/OutsourcingPartialContext";
+import {
+  isStepPopulated,
+  scopeEstimationToInvestmentType,
+} from "@/features/estimations/api/investments";
 
-const DEFAULT_SECTOR = SECTOR_CATALOG[0] ?? {
-  id: "residential-buildings",
-  name: "Residential buildings",
+const DEFAULT_SECTOR: Sector = {
+  id: "",
+  name: "",
 };
 
 type PageMode = "form" | "table";
@@ -33,109 +48,277 @@ export interface EstimationScreenProps {
   mineId?: string;
   /** When URL mine ids are placeholders, match the API list by mine name. */
   mineName?: string;
+  /**
+   * Active OW / PO / FO / AH FunctionInvestmentType id. Cost items and phases are
+   * isolated per type so ownership and outsourcing never share phase data.
+   */
+  functionInvestmentTypeId?: string | null;
+  /** When set, phase cards / overall sheet use outsourcing rules. */
+  outsourcingPartial?: OutsourcingContributionSettings | null;
+  onEditOutsourcingConfig?: () => void;
+  /** Fires when the form has local edits that would be lost on delivery-mode switch. */
+  onUnsavedChangesChange?: (dirty: boolean) => void;
 }
 
 /**
  * Cost-estimation workspace.
- * Mode is derived from list length; modeOverride covers user-driven form/table switches
- * without setState-in-effect loops.
- * Active sector comes from `?sector=` (MineSideNav).
+ * Per cost function: empty function → create form; function with items → table.
+ * Active function comes from `?sector=` (MineSideNav).
  */
 export function EstimationScreen({
   phaseTypes,
   mineId,
   mineName,
+  functionInvestmentTypeId = null,
+  outsourcingPartial = null,
+  onEditOutsourcingConfig,
+  onUnsavedChangesChange,
 }: EstimationScreenProps) {
   const searchParams = useSearchParams();
-  const { estimation, status, statusMessage } = useEstimationState();
+  const { estimation, status, statusMessage, dirty } = useEstimationState();
   const dispatch = useEstimationDispatch();
-  const { submit, submitting } = useSubmitEstimation();
+  const { submit, submitting } = useSubmitEstimation({
+    phaseValidationMode: isFullOutsourcing(outsourcingPartial)
+      ? "full"
+      : isPartialOutsourcing(outsourcingPartial)
+        ? "partial"
+        : "strict",
+  });
   const { items, loading, refresh, replaceItem, open, remove } =
     useEstimationList();
 
   const [modeOverride, setModeOverride] = useState<PageMode | null>(null);
   const openedMineIdRef = useRef<string | null>(null);
+  const seededEmptyFunctionRef = useRef<string | null>(null);
+  const [mineFunctions, setMineFunctions] = useState<MineFunction[]>([]);
+  const [functionsReady, setFunctionsReady] = useState(false);
 
   const activeSectorId = searchParams.get("sector") || DEFAULT_SECTOR.id;
-  const activeSector =
-    SECTOR_CATALOG.find((sector) => sector.id === activeSectorId) ??
-    DEFAULT_SECTOR;
+  const activeSector: Sector = useMemo(() => {
+    const fromApi = mineFunctions.find(
+      (fn) => fn.function_master_id === activeSectorId,
+    );
+    if (fromApi) {
+      return {
+        id: fromApi.function_master_id,
+        name: fromApi.function_name,
+      };
+    }
+    return activeSectorId
+      ? { id: activeSectorId, name: "Selected function" }
+      : DEFAULT_SECTOR;
+  }, [mineFunctions, activeSectorId]);
+
+  async function reloadMineFunctions() {
+    if (!mineId?.trim()) {
+      setMineFunctions([]);
+      setFunctionsReady(true);
+      return;
+    }
+    try {
+      const list = await getMineWiseFunctionList(mineId);
+      setMineFunctions(list);
+    } catch {
+      setMineFunctions([]);
+    } finally {
+      setFunctionsReady(true);
+    }
+  }
+
+  useEffect(() => {
+    setFunctionsReady(false);
+    void reloadMineFunctions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when mine changes
+  }, [mineId]);
 
   useEffect(() => {
     dispatch({ type: "SET_PHASE_TYPES", phaseTypes });
   }, [dispatch, phaseTypes]);
 
   useEffect(() => {
-    if (loading) return;
-    const openKey = mineId || mineName || null;
-    if (!openKey) return;
-    if (openedMineIdRef.current === openKey) return;
-    const nameKey = (mineName || "").trim().toLowerCase();
+    onUnsavedChangesChange?.(Boolean(dirty && status !== "saving"));
+  }, [dirty, status, onUnsavedChangesChange]);
+
+  useEffect(() => {
+    if (loading) return
+    // Wait for FIT so we don't open an empty scoped sheet and wipe the view.
+    if (!functionInvestmentTypeId) return
+    const openKey = [
+      mineId || mineName || "",
+      functionInvestmentTypeId,
+      activeSectorId || "",
+    ].join(":")
+    if (!mineId && !mineName) return
+    if (openedMineIdRef.current === openKey) return
+    const nameKey = (mineName || "").trim().toLowerCase()
     const match =
       items.find((item) => item.id === mineId || item.mine_id === mineId) ??
       (nameKey
         ? items.find(
             (item) => (item.siteSubtitle || "").trim().toLowerCase() === nameKey,
           )
-        : undefined);
-    if (!match) return;
-    openedMineIdRef.current = openKey;
-    void open(match.id || match.mine_id || mineId || openKey);
-  }, [mineId, mineName, items, loading, open]);
+        : undefined)
+    if (!match) return
+    openedMineIdRef.current = openKey
+    void open(match.id || match.mine_id || mineId || openKey, undefined, {
+      functionInvestmentTypeId,
+      functionMasterId: activeSectorId || null,
+      includeLegacyNullFit: !outsourcingPartial,
+    })
+  }, [
+    mineId,
+    mineName,
+    items,
+    loading,
+    open,
+    functionInvestmentTypeId,
+    activeSectorId,
+    outsourcingPartial,
+  ])
+
+  // Switching Cost Function or FIT recalculates form vs table.
+  useEffect(() => {
+    setModeOverride(null);
+    seededEmptyFunctionRef.current = null;
+    openedMineIdRef.current = null;
+  }, [activeSectorId, functionInvestmentTypeId]);
+
+  // Persist “has items” for the active function + FIT only.
+  const activeFunctionHasItems = useMemo(() => {
+    if (!activeSectorId || !functionInvestmentTypeId) return false
+    const mineItem =
+      items.find((item) => item.id === mineId || item.mine_id === mineId) ??
+      items[0]
+    if (!mineItem) return false
+    const scoped = scopeEstimationToInvestmentType(
+      mineItem,
+      functionInvestmentTypeId,
+      activeSectorId,
+      {
+        includeLegacyNullFit: !outsourcingPartial,
+        functionName: activeSector.name || null,
+      },
+    )
+    return scoped.blocks.some((block) =>
+      block.entityTabs.some((tab) => tab.steps.some(isStepPopulated)),
+    )
+  }, [
+    items,
+    mineId,
+    activeSectorId,
+    activeSector.name,
+    functionInvestmentTypeId,
+    outsourcingPartial,
+  ])
 
   const pageMode: PageMode =
-    modeOverride ?? (items.length > 0 ? "table" : "form");
+    modeOverride ??
+    (activeSectorId && functionsReady
+      ? activeFunctionHasItems
+        ? "table"
+        : "form"
+      : items.length > 0
+        ? "table"
+        : "form");
 
-  // Ensure a block exists for the nav-selected sector while editing the form.
+  const sectorBlocks = estimation.blocks.filter(
+    (block) => block.sectorId === activeSector.id,
+  );
+  const hasActiveBlock = sectorBlocks.length > 0;
+  const activeBlockNameMismatch = sectorBlocks.some(
+    (block) =>
+      Boolean(activeSector.name) && block.sectorName !== activeSector.name,
+  );
+
+  const activeSectorIdRef = useRef(activeSectorId);
+  activeSectorIdRef.current = activeSectorId;
+
+  // Empty cost function → ensure a create block exists for the active sector.
+  // Re-seed if open()/list hydration overwrote estimation with a different function.
   useEffect(() => {
     if (pageMode !== "form") return;
-    if (estimation.blocks.some((block) => block.sectorId === activeSector.id)) {
+    if (!activeSector.id || loading) return;
+    if (activeFunctionHasItems) return;
+    if (hasActiveBlock && !activeBlockNameMismatch) {
+      seededEmptyFunctionRef.current = `${activeSector.id}:${functionInvestmentTypeId ?? ""}`;
       return;
     }
 
-    let cancelled = false;
+    const existingMineId = estimation.mine_id || mineId || undefined;
+    const siteSubtitle =
+      estimation.siteSubtitle || mineName || "Chuperbhita Simlong OCP";
+    const appendixLabel = estimation.appendixLabel || "APPENDIX A 2.2";
+    const phaseLimit = estimation.phaseLimit ?? null;
+    const sectorId = activeSector.id;
+    const sectorName = activeSector.name;
+
     void (async () => {
-      const entities = await getEntities(activeSector.id);
-      if (cancelled) return;
+      const entities = await getEntities(sectorId);
+      // Ignore stale async work after the user switched Cost Function.
+      if (sectorId !== activeSectorIdRef.current) return;
+
       dispatch({
         type: "SET_ENTITIES",
-        sectorId: activeSector.id,
+        sectorId,
         entities,
       });
-      dispatch({
-        type: "ADD_BLOCK",
-        sectorId: activeSector.id,
-        sectorName: activeSector.name,
-        entities,
-      });
-    })();
 
-    return () => {
-      cancelled = true;
-    };
+      dispatch({
+        type: "SET_ESTIMATION",
+        payload: {
+          ...createEmptyEstimation(sectorId, sectorName, entities),
+          ...(existingMineId
+            ? { id: existingMineId, mine_id: existingMineId }
+            : {}),
+          functionInvestmentTypeId,
+          siteSubtitle,
+          appendixLabel,
+          phaseLimit,
+          // New / empty function: never carry another function's design %.
+          electrificationPercentByEntity: {},
+          percentageMasterIdByEntity: {},
+        },
+      });
+      seededEmptyFunctionRef.current = `${sectorId}:${functionInvestmentTypeId ?? ""}`;
+    })();
   }, [
+    pageMode,
     activeSector.id,
     activeSector.name,
+    activeFunctionHasItems,
+    hasActiveBlock,
+    activeBlockNameMismatch,
+    loading,
     dispatch,
-    estimation.blocks,
-    pageMode,
+    mineId,
+    mineName,
+    estimation.mine_id,
+    estimation.siteSubtitle,
+    estimation.appendixLabel,
+    estimation.phaseLimit,
+    functionInvestmentTypeId,
   ]);
 
   async function startNewEstimation() {
     const entities = await getEntities(activeSector.id);
     dispatch({
       type: "SET_ESTIMATION",
-      payload: createEmptyEstimation(
-        activeSector.id,
-        activeSector.name,
-        entities,
-      ),
+      payload: {
+        ...createEmptyEstimation(
+          activeSector.id,
+          activeSector.name,
+          entities,
+        ),
+        ...(mineId ? { id: mineId, mine_id: mineId } : {}),
+        siteSubtitle: mineName || estimation.siteSubtitle || "Chuperbhita Simlong OCP",
+      },
     });
+    seededEmptyFunctionRef.current = activeSector.id;
     setModeOverride("form");
   }
 
   async function handleAddEstimation() {
-    if (items.length > 0) {
+    if (activeFunctionHasItems) {
       setModeOverride("table");
       return;
     }
@@ -143,8 +326,13 @@ export function EstimationScreen({
   }
 
   async function handleEdit(id: string, entityId?: string) {
-    await open(id, entityId);
-    setModeOverride("form");
+    await open(id, entityId, {
+      functionInvestmentTypeId,
+      functionMasterId: activeSectorId || null,
+      includeLegacyNullFit: !outsourcingPartial,
+      functionName: activeSector.name || null,
+    })
+    setModeOverride("form")
   }
 
   function handleCancel() {
@@ -154,30 +342,84 @@ export function EstimationScreen({
   async function handleSubmit() {
     const saved = await submit();
     if (!saved) return;
-    replaceItem(saved);
     await refresh();
+    await reloadMineFunctions();
+    seededEmptyFunctionRef.current = null;
     setModeOverride("table");
   }
 
   async function handleDelete(id: string) {
     await remove(id);
+    await reloadMineFunctions();
     if (items.length <= 1) {
       dispatch({ type: "SET_ESTIMATION", payload: EMPTY_ESTIMATION });
       setModeOverride(null);
     }
   }
 
-  const sectorBlocks = estimation.blocks.filter(
-    (block) => block.sectorId === activeSector.id,
-  );
   const lastBlockId = sectorBlocks[sectorBlocks.length - 1]?.id;
-  const isEditing = Boolean(estimation.id);
-  const showCancel = pageMode === "form" && items.length > 0;
-  const isWorkingOnForm = pageMode === "form" && estimation.blocks.length > 0;
-  const showEmptyState = !loading && items.length === 0 && !isWorkingOnForm;
+  const isEditing = Boolean(estimation.mine_id || estimation.id);
+  const showCancel =
+    pageMode === "form" && (items.length > 0 || activeFunctionHasItems);
+  const isWorkingOnForm = pageMode === "form" && sectorBlocks.length > 0;
+  const showEmptyState =
+    !loading &&
+    functionsReady &&
+    !activeSectorId &&
+    items.length === 0 &&
+    !isWorkingOnForm;
 
   return (
-    <>
+    <OutsourcingPartialProvider value={outsourcingPartial}>
+      {outsourcingPartial && onEditOutsourcingConfig ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 text-sm">
+          <p className="text-gray-600">
+            {isFullOutsourcing(outsourcingPartial) ? (
+              <>
+                Full outsourcing — escalation{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.escalationPercent}%
+                </span>
+                , payback{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.paybackPeriodYears} yr
+                </span>
+                , starting{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.paybackStartPhase}
+                </span>
+                .
+              </>
+            ) : isAdhocOutsourcing(outsourcingPartial) ? (
+              <>Adhoc outsourcing — enter contribution amounts manually.</>
+            ) : isPartialOutsourcing(outsourcingPartial) ? (
+              <>
+                Partial outsourcing — contribution{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.contributionPercentage}%
+                </span>
+                , escalation{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.escalationPercent}%
+                </span>
+                , payback{" "}
+                <span className="font-medium text-portal-navy">
+                  {outsourcingPartial.paybackPeriodYears} yr
+                </span>
+                .
+              </>
+            ) : null}
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onEditOutsourcingConfig}
+          >
+            Edit outsourcing config
+          </Button>
+        </div>
+      ) : null}
       {loading && pageMode !== "form" ? (
         <div className="flex flex-col items-center justify-center py-32">
           <svg
@@ -247,13 +489,22 @@ export function EstimationScreen({
         <CostItemsTable
           items={items}
           phaseTypes={phaseTypes}
+          functionMasterId={activeSectorId || null}
+          functionName={activeSector.name || null}
+          functionInvestmentTypeId={functionInvestmentTypeId}
+          includeLegacyNullFit={!outsourcingPartial}
           onEdit={(id, entityId) => void handleEdit(id, entityId)}
           onDelete={(id) => void handleDelete(id)}
           onChanged={async () => {
             await refresh();
+            await reloadMineFunctions();
           }}
           onItemUpdated={replaceItem}
         />
+      ) : sectorBlocks.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
+          Preparing cost item form…
+        </div>
       ) : (
         sectorBlocks.map((block) => (
           <EstimationBlockView
@@ -269,6 +520,6 @@ export function EstimationScreen({
           />
         ))
       )}
-    </>
+    </OutsourcingPartialProvider>
   );
 }

@@ -11,17 +11,18 @@ import {
 export interface DeliveryModeModalProps {
   open: boolean
   initialMode?: DeliveryModeCode | null
+  /** Optional cost-function name shown in the title. */
+  functionName?: string | null
   confirming?: boolean
-  onClose: () => void
   onConfirm: (mode: DeliveryModeCode) => void
 }
 
-/** Modal is radios only — Life of Mine belongs on the project listing. */
+/** Required choice modal — must pick Ownership or Outsourcing to continue. */
 export function DeliveryModeModal({
   open,
   initialMode = null,
+  functionName = null,
   confirming = false,
-  onClose,
   onConfirm,
 }: DeliveryModeModalProps) {
   const [selected, setSelected] = useState<DeliveryModeCode | null>(
@@ -43,30 +44,33 @@ export function DeliveryModeModal({
     onConfirm(selected)
   }
 
+  const title = functionName?.trim()
+    ? `Select delivery mode — ${functionName.trim()}`
+    : 'Select delivery mode'
+
   return (
     <Modal
       open={open}
-      title="Select delivery mode"
+      title={title}
       size="sm"
-      onClose={onClose}
+      dismissible={false}
       footer={
-        <>
-          <Button type="button" variant="ghost" onClick={onClose} disabled={confirming}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            onClick={handleContinue}
-            disabled={confirming}
-          >
-            {confirming ? 'Continuing…' : 'Continue'}
-          </Button>
-        </>
+        <Button
+          type="button"
+          variant="primary"
+          onClick={handleContinue}
+          disabled={confirming || !selected}
+        >
+          {confirming ? 'Continuing…' : 'Continue'}
+        </Button>
       }
     >
       <fieldset className="space-y-3">
         <legend className="sr-only">Delivery mode</legend>
+        <p className="text-sm text-gray-600">
+          Select how this cost function is delivered. A choice is required to
+          continue. Other functions can use a different mode.
+        </p>
         <div className="space-y-2">
           {DELIVERY_MODE_OPTIONS.map((option) => {
             const inputId = `delivery-mode-${option.code}`

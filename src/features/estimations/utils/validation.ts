@@ -16,8 +16,35 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
   return phase.percentage !== null && !Number.isNaN(phase.percentage)
 }
 
-/** Populated cost items need at least one phase with a value; filled phases must sum to Amount. */
-export function phaseAmountSumError(step: Step): string | null {
+/**
+ * Ownership (`strict`): filled phase values must sum to Amount.
+ * Partial: at least one phase value required; sum need not equal Amount
+ *   (contributor share is below total; escalated remainder goes on Overall).
+ * Full: no phase entry required.
+ */
+export type PhaseValidationMode = 'strict' | 'partial' | 'full'
+
+export type EstimationValidationOptions = {
+  phaseValidationMode?: PhaseValidationMode
+  /** @deprecated Prefer phaseValidationMode: 'full' */
+  skipPhaseAmountValidation?: boolean
+}
+
+function resolvePhaseValidationMode(
+  options?: EstimationValidationOptions,
+): PhaseValidationMode {
+  if (options?.phaseValidationMode) return options.phaseValidationMode
+  if (options?.skipPhaseAmountValidation) return 'full'
+  return 'strict'
+}
+
+/** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict). */
+export function phaseAmountSumError(
+  step: Step,
+  mode: PhaseValidationMode = 'strict',
+): string | null {
+  if (mode === 'full') return null
+
   const filled = step.phases.filter(phaseHasEnteredValue)
 
   if (filled.length === 0) {
@@ -27,6 +54,10 @@ export function phaseAmountSumError(step: Step): string | null {
     }
     return 'Enter a value in at least one phase.'
   }
+
+  // Partial: contributor amounts are a share of phase values; they do not need to
+  // cover 100% of Amount (remainder is escalated on the Overall sheet).
+  if (mode === 'partial') return null
 
   if (phaseValuesSumToAmount(filled, step.amount ?? 0)) return null
   const sum = filled.reduce(
@@ -42,6 +73,7 @@ export function validateStep(
   blockId: string,
   entityId: string,
   minePhaseLimit?: number | null,
+  options?: EstimationValidationOptions,
 ): void {
   if (!step.details.trim()) {
     errors[stepKey(blockId, entityId, step.id, 'details')] = 'Details are required'
@@ -62,7 +94,7 @@ export function validateStep(
       `This cost item has ${step.phases.length} phases; maximum allowed is ${limit}`
   }
   if (isStepPopulated(step)) {
-    const sumError = phaseAmountSumError(step)
+    const sumError = phaseAmountSumError(step, resolvePhaseValidationMode(options))
     if (sumError) {
       errors[stepKey(blockId, entityId, step.id, 'phaseAmountSum')] = sumError
     }
@@ -73,6 +105,7 @@ export function validateBlock(
   block: EstimationBlock,
   errors: FieldErrors,
   minePhaseLimit?: number | null,
+  options?: EstimationValidationOptions,
 ): void {
   if (!block.sectorName.trim()) {
     errors[`${block.id}.sectorName`] = 'Sector is required'
@@ -86,12 +119,15 @@ export function validateBlock(
       errors[`${block.id}.${activeTab.entityId}.steps`] = 'Add at least one step'
     }
     for (const step of activeTab.steps) {
-      validateStep(step, errors, block.id, activeTab.entityId, minePhaseLimit)
+      validateStep(step, errors, block.id, activeTab.entityId, minePhaseLimit, options)
     }
   }
 }
 
-export function validateEstimation(estimation: Estimation): FieldErrors {
+export function validateEstimation(
+  estimation: Estimation,
+  options?: EstimationValidationOptions,
+): FieldErrors {
   const errors: FieldErrors = {}
   if (
     estimation.phaseLimit == null ||
@@ -128,7 +164,7 @@ export function validateEstimation(estimation: Estimation): FieldErrors {
     errors.blocks = 'Add at least one estimation'
   }
   for (const block of estimation.blocks) {
-    validateBlock(block, errors, estimation.phaseLimit)
+    validateBlock(block, errors, estimation.phaseLimit, options)
   }
   return errors
 }

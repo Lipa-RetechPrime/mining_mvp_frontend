@@ -2,21 +2,31 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { SECTOR_CATALOG } from '@/features/estimations/api/master'
+import { getMineWiseFunctionList } from '@/features/estimations/api/master'
+import {
+  ensureAdhocOutsourcingStub,
+  fitToFullSettings,
+  fitToPartialSettings,
+  getFunctionInvestmentTypeDetails,
+  type FunctionInvestmentTypeRecord,
+  upsertFullOutsourcingConfig,
+  upsertPartialOutsourcingConfig,
+} from '@/features/estimations/api/functionInvestmentType'
 import { Button } from '@/shared/components/ui/Button'
 import { Input } from '@/shared/components/ui/Input'
 import type { PhaseTypeMaster } from '@/shared/types'
 import {
-  FULL_CONTRIBUTION_OPTIONS,
-  PARTIAL_AGENT_OPTIONS,
   createEmptyOutsourcingConfig,
-  getStoredOutsourcingConfig,
-  setStoredOutsourcingConfig,
   validateOutsourcingConfig,
   type OutsourcingConfig,
   type OutsourcingContributionKind,
   type OutsourcingFieldErrors,
 } from './outsourcingConfig'
+import type { OutsourcingContributionSettings } from './OutsourcingPartialContext'
+import {
+  getPreferredOutsourcingKind,
+  setPreferredOutsourcingKind,
+} from './outsourcingPreference'
 
 function parseOptionalNumber(raw: string): number | null {
   const trimmed = raw.trim()
@@ -32,6 +42,7 @@ function RadioCard({
   label,
   description,
   onChange,
+  className,
 }: {
   name: string
   value: string
@@ -39,6 +50,7 @@ function RadioCard({
   label: string
   description?: string
   onChange: () => void
+  className?: string
 }) {
   const id = `${name}-${value}`
   return (
@@ -49,6 +61,7 @@ function RadioCard({
         checked
           ? 'border-portal-purple bg-portal-purple/5'
           : 'border-portal-border hover:border-slate-300',
+        className,
       ].join(' ')}
     >
       <input
@@ -75,11 +88,17 @@ export function OutsourcingPlaceholder({
   projectName,
   phaseTypes = [],
   onChangeMode,
+  onContinueToEstimation,
 }: {
   projectId: string
   projectName: string
   phaseTypes?: PhaseTypeMaster[]
   onChangeMode?: () => void
+  /** After a valid save, hand settings to the parent so the cost-item form opens. */
+  onContinueToEstimation?: (
+    kind: OutsourcingContributionKind,
+    settings: OutsourcingContributionSettings,
+  ) => void
 }) {
   const searchParams = useSearchParams()
   const [config, setConfig] = useState<OutsourcingConfig>(() =>
@@ -88,23 +107,166 @@ export function OutsourcingPlaceholder({
   const [errors, setErrors] = useState<OutsourcingFieldErrors>({})
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [fitId, setFitId] = useState<string | null>(null)
+  const [partialFitId, setPartialFitId] = useState<string | null>(null)
+  const [fullFitId, setFullFitId] = useState<string | null>(null)
+  const [adhocFitId, setAdhocFitId] = useState<string | null>(null)
+  const [partialFitRecord, setPartialFitRecord] =
+    useState<FunctionInvestmentTypeRecord | null>(null)
+  const [fullFitRecord, setFullFitRecord] =
+    useState<FunctionInvestmentTypeRecord | null>(null)
+  const [functionCatalog, setFunctionCatalog] = useState<{ id: string; name: string }[]>([])
+
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const list = await getMineWiseFunctionList(projectId)
+        if (cancelled || list.length === 0) return
+        setFunctionCatalog(
+          list.map((fn) => ({
+            id: fn.function_master_id,
+            name: fn.function_name,
+          })),
+        )
+      } catch {
+        // Keep SECTOR_CATALOG fallback when the mine has no functions yet.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
 
   const currentFunctionId =
-    searchParams.get('sector') || SECTOR_CATALOG[0]?.id || ''
+    searchParams.get('sector') || functionCatalog[0]?.id || ''
   const currentFunction = useMemo(
     () =>
-      SECTOR_CATALOG.find((sector) => sector.id === currentFunctionId) ??
-      SECTOR_CATALOG[0],
-    [currentFunctionId],
+      functionCatalog.find((sector: { id: string; name: string }) => sector.id === currentFunctionId) ??
+      (currentFunctionId
+        ? { id: currentFunctionId, name: 'Selected function' }
+        : functionCatalog[0]),
+    [currentFunctionId, functionCatalog],
   )
 
   useEffect(() => {
-    const stored = getStoredOutsourcingConfig(projectId)
-    setConfig(stored ?? createEmptyOutsourcingConfig())
-    setErrors({})
-    setSavedMessage(null)
-    setHydrated(true)
-  }, [projectId])
+    if (!projectId || !currentFunctionId) {
+      setConfig(createEmptyOutsourcingConfig())
+      setFitId(null)
+      setPartialFitId(null)
+      setFullFitId(null)
+      setAdhocFitId(null)
+      setPartialFitRecord(null)
+      setFullFitRecord(null)
+      setErrors({})
+      setSavedMessage(null)
+      setHydrated(Boolean(projectId))
+      return
+    }
+
+    let cancelled = false
+    setHydrated(false)
+    void (async () => {
+      try {
+        const [partialFit, fullFit, adhocFit] = await Promise.all([
+          getFunctionInvestmentTypeDetails(
+            currentFunctionId,
+            'partial-outsourcing',
+          ),
+          getFunctionInvestmentTypeDetails(
+            currentFunctionId,
+            'full-outsourcing',
+          ),
+          getFunctionInvestmentTypeDetails(
+            currentFunctionId,
+            'adhoc-outsourcing',
+          ),
+        ])
+        if (cancelled) return
+
+        const partialId = partialFit?.function_investment_type_id ?? null
+        const fullId = fullFit?.function_investment_type_id ?? null
+        const adhocId = adhocFit?.function_investment_type_id ?? null
+        setPartialFitId(partialId)
+        setFullFitId(fullId)
+        setAdhocFitId(adhocId)
+        setPartialFitRecord(partialFit)
+        setFullFitRecord(fullFit)
+
+        const fullSettings = fitToFullSettings(fullFit)
+        const partialSettings = fitToPartialSettings(partialFit)
+        const preferred =
+          getPreferredOutsourcingKind(currentFunctionId) ??
+          (partialSettings ? 'partial' : fullSettings ? 'full' : adhocId ? 'adhoc' : 'partial')
+
+        if (preferred === 'full' && fullSettings) {
+          setFitId(fullId)
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: 'full',
+            paybackPeriodYears: fullSettings.paybackPeriodYears,
+            escalationPercent: fullSettings.escalationPercent,
+            paybackStartPhase: fullSettings.paybackStartPhase,
+          })
+        } else if (preferred === 'partial' && partialSettings) {
+          setFitId(partialId)
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: 'partial',
+            paybackPeriodYears: partialSettings.paybackPeriodYears,
+            contributionPercentage: partialSettings.contributionPercentage,
+            escalationPercent: partialSettings.escalationPercent,
+          })
+        } else if (preferred === 'adhoc') {
+          setFitId(adhocId)
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: 'adhoc',
+          })
+        } else if (partialSettings) {
+          setFitId(partialId)
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: 'partial',
+            paybackPeriodYears: partialSettings.paybackPeriodYears,
+            contributionPercentage: partialSettings.contributionPercentage,
+            escalationPercent: partialSettings.escalationPercent,
+          })
+        } else if (fullSettings) {
+          setFitId(fullId)
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: 'full',
+            paybackPeriodYears: fullSettings.paybackPeriodYears,
+            escalationPercent: fullSettings.escalationPercent,
+            paybackStartPhase: fullSettings.paybackStartPhase,
+          })
+        } else {
+          setFitId(null)
+          setConfig(createEmptyOutsourcingConfig())
+        }
+        setErrors({})
+        setSavedMessage(null)
+      } catch {
+        if (cancelled) return
+        setFitId(null)
+        setPartialFitId(null)
+        setFullFitId(null)
+        setAdhocFitId(null)
+        setPartialFitRecord(null)
+        setFullFitRecord(null)
+        setConfig(createEmptyOutsourcingConfig())
+      } finally {
+        if (!cancelled) setHydrated(true)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, currentFunctionId])
 
   // Clear field-level escalation errors when switching cost functions in the nav.
   useEffect(() => {
@@ -133,18 +295,132 @@ export function OutsourcingPlaceholder({
   function setContributionKind(kind: OutsourcingContributionKind) {
     setSavedMessage(null)
     setErrors({})
-    setConfig((prev) => ({ ...prev, contributionKind: kind }))
+    if (kind === 'partial') {
+      const settings = fitToPartialSettings(partialFitRecord)
+      setFitId(partialFitId)
+      setConfig({
+        ...createEmptyOutsourcingConfig(),
+        contributionKind: 'partial',
+        paybackPeriodYears: settings?.paybackPeriodYears ?? null,
+        contributionPercentage: settings?.contributionPercentage ?? null,
+        escalationPercent: settings?.escalationPercent ?? null,
+      })
+      return
+    }
+    if (kind === 'full') {
+      const settings = fitToFullSettings(fullFitRecord)
+      setFitId(fullFitId)
+      setConfig({
+        ...createEmptyOutsourcingConfig(),
+        contributionKind: 'full',
+        paybackPeriodYears: settings?.paybackPeriodYears ?? null,
+        escalationPercent: settings?.escalationPercent ?? null,
+        paybackStartPhase: settings?.paybackStartPhase ?? null,
+      })
+      return
+    }
+    setFitId(adhocFitId)
+    setConfig({
+      ...createEmptyOutsourcingConfig(),
+      contributionKind: 'adhoc',
+    })
   }
 
-  function handleSave() {
+  async function handleSave() {
+    const functionId =
+      currentFunction?.id || currentFunctionId || functionCatalog[0]?.id
+    if (!functionId) {
+      setSavedMessage(null)
+      setErrors({
+        partialAgent: 'Select a cost function before saving.',
+      })
+      return
+    }
     const nextErrors = validateOutsourcingConfig(config, {
-      currentFunctionId:
-        currentFunction?.id || currentFunctionId || SECTOR_CATALOG[0]?.id,
+      currentFunctionId: functionId,
+      currentFunctionName: currentFunction?.name,
     })
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
-    setStoredOutsourcingConfig(projectId, config)
-    setSavedMessage('Outsourcing configuration saved.')
+
+    setSaving(true)
+    setSavedMessage(null)
+    try {
+      if (config.contributionKind === 'partial') {
+        const saved = await upsertPartialOutsourcingConfig({
+          function_master_id: functionId,
+          // Never fall back to another kind's FIT id (would mutate PO ↔ FO).
+          function_investment_type_id: partialFitId,
+          payback_period: config.paybackPeriodYears!,
+          contribution_percentage: config.contributionPercentage!,
+          escalation_percentage: config.escalationPercent!,
+        })
+        setPartialFitId(saved.function_investment_type_id)
+        setPartialFitRecord(saved)
+        setFitId(saved.function_investment_type_id)
+        setPreferredOutsourcingKind(functionId, 'partial')
+        // Prefer API record; fall back to the form values we just saved so a
+        // sparse create/update response cannot block opening the cost form.
+        const fromApi = fitToPartialSettings(saved)
+        const settings: OutsourcingContributionSettings = {
+          kind: 'partial',
+          contributionPercentage:
+            fromApi?.contributionPercentage ?? config.contributionPercentage!,
+          escalationPercent:
+            fromApi?.escalationPercent ?? config.escalationPercent!,
+          paybackPeriodYears:
+            fromApi?.paybackPeriodYears ?? config.paybackPeriodYears!,
+          functionInvestmentTypeId: saved.function_investment_type_id,
+        }
+        onContinueToEstimation?.('partial', settings)
+        setSavedMessage('Configuration saved. Opening cost item form…')
+      } else if (config.contributionKind === 'full') {
+        const saved = await upsertFullOutsourcingConfig({
+          function_master_id: functionId,
+          // Never fall back to another kind's FIT id (would mutate FO ↔ PO).
+          function_investment_type_id: fullFitId,
+          payback_period: config.paybackPeriodYears!,
+          escalation_percentage: config.escalationPercent!,
+          from_payback_start: config.paybackStartPhase!,
+        })
+        setFullFitId(saved.function_investment_type_id)
+        setFullFitRecord(saved)
+        setFitId(saved.function_investment_type_id)
+        setPreferredOutsourcingKind(functionId, 'full')
+        const fromApi = fitToFullSettings(saved)
+        const settings: OutsourcingContributionSettings = {
+          kind: 'full',
+          escalationPercent:
+            fromApi?.escalationPercent ?? config.escalationPercent!,
+          paybackPeriodYears:
+            fromApi?.paybackPeriodYears ?? config.paybackPeriodYears!,
+          paybackStartPhase:
+            fromApi?.paybackStartPhase ?? config.paybackStartPhase!,
+          functionInvestmentTypeId: saved.function_investment_type_id,
+        }
+        onContinueToEstimation?.('full', settings)
+        setSavedMessage('Configuration saved. Opening cost item form…')
+      } else {
+        const saved = await ensureAdhocOutsourcingStub(functionId)
+        setAdhocFitId(saved.function_investment_type_id)
+        setFitId(saved.function_investment_type_id)
+        setPreferredOutsourcingKind(functionId, 'adhoc')
+        onContinueToEstimation?.('adhoc', {
+          kind: 'adhoc',
+          functionInvestmentTypeId: saved.function_investment_type_id,
+        })
+        setSavedMessage('Configuration saved. Opening cost item form…')
+      }
+    } catch (err) {
+      setErrors({
+        escalationPercent:
+          err instanceof Error
+            ? err.message
+            : 'Failed to save outsourcing configuration.',
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   if (!hydrated) {
@@ -181,144 +457,118 @@ export function OutsourcingPlaceholder({
         <legend className="text-sm font-medium text-portal-navy">
           Contribution by outsourcing agent
         </legend>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="flex gap-2">
           <RadioCard
             name="contribution-kind"
             value="partial"
             checked={config.contributionKind === 'partial'}
-            label="Partial contribution"
-            description="Agent covers part of the investment; escalation is set per cost function."
+            label="Partial Contribution by External Agent"
+            description="Agent covers part of the investment."
             onChange={() => setContributionKind('partial')}
+            className="w-full"
           />
           <RadioCard
             name="contribution-kind"
             value="full"
             checked={config.contributionKind === 'full'}
-            label="Full contribution"
+            label="Full Contribution by External Agent"
             description="Agent fully funds via a contribution model (e.g. flat rate)."
             onChange={() => setContributionKind('full')}
+            className="w-full"
+          />
+          <RadioCard
+            name="contribution-kind"
+            value="adhoc"
+            checked={config.contributionKind === 'adhoc'}
+            label="Adhoc Contribution by External Agent"
+            description="Enter the manually calculated contribution amounts."
+            onChange={() => setContributionKind('adhoc')}
+            className="w-full"
           />
         </div>
       </fieldset>
 
-      {config.contributionKind === 'partial' ? (
+      {config.contributionKind === 'adhoc' ? null : config.contributionKind === 'partial' ? (
         <div className="space-y-4 border-t border-portal-border pt-4">
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-portal-navy">
-              Outsourcing agent
-            </legend>
-            <div className="grid gap-2 sm:max-w-md">
-              {/* {PARTIAL_AGENT_OPTIONS.map((agent) => (
-                <RadioCard
-                  key={agent.code}
-                  name="partial-agent"
-                  value={agent.code}
-                  checked={config.partialAgent === agent.code}
-                  label={agent.label}
-                  onChange={() =>
-                    patchConfig({ partialAgent: agent.code })
-                  }
-                />
-              ))} */}
-              {/* <p className="text-sm font-medium text-portal-navy">External Agent</p> */}
+          <div className="flex flex-wrap gap-4">
+            <div className="min-w-[10rem] flex-1">
+              <Input
+                label="Payback period"
+                type="number"
+                min={0}
+                step={1}
+                suffix="years"
+                required
+                placeholder="e.g. 3"
+                value={
+                  config.paybackPeriodYears != null
+                    ? String(config.paybackPeriodYears)
+                    : ''
+                }
+                error={errors.paybackPeriodYears}
+                onChange={(event) =>
+                  patchConfig({
+                    paybackPeriodYears: parseOptionalNumber(event.target.value),
+                  })
+                }
+              />
             </div>
-            {errors.partialAgent ? (
-              <p className="text-xs text-red-600" role="alert">
-                {errors.partialAgent}
-              </p>
-            ) : null}
-          </fieldset>
 
-          <div className="flex gap-4">
-          <div className="w-full">
-            <Input
-              label="Payback period"
-              type="number"
-              min={0}
-              step={1}
-              suffix="years"
-              required
-              placeholder="e.g. 10"
-              value={
-                config.paybackPeriodYears != null
-                  ? String(config.paybackPeriodYears)
-                  : ''
-              }
-              error={errors.paybackPeriodYears}
-              onChange={(event) =>
-                patchConfig({
-                  paybackPeriodYears: parseOptionalNumber(event.target.value),
-                })
-              }
-            />
-          </div>
-
-          <div className="w-full">
-            <Input
-              label={`Escalation percentage — ${currentFunction?.name ?? 'current function'}`}
-              type="number"
-              min={0}
-              step={0.1}
-              suffix="%"
-              required
-              placeholder="0"
-              value={
-                currentFunction &&
-                config.escalationByFunction?.[currentFunction.id] != null
-                  ? String(config.escalationByFunction[currentFunction.id])
-                  : ''
-              }
-              error={
-                currentFunction
-                  ? errors[`escalation.${currentFunction.id}`]
-                  : undefined
-              }
-              onChange={(event) => {
-                if (!currentFunction) return
-                patchConfig({
-                  escalationByFunction: {
-                    ...(config.escalationByFunction ?? {}),
-                    [currentFunction.id]: parseOptionalNumber(
+            <div className="min-w-[10rem] flex-1">
+              <Input
+                label="Contribution percentage"
+                type="number"
+                min={0}
+                step={1}
+                suffix="%"
+                required
+                placeholder="e.g. 30"
+                value={
+                  config.contributionPercentage != null
+                    ? String(config.contributionPercentage)
+                    : ''
+                }
+                error={errors.contributionPercentage}
+                onChange={(event) =>
+                  patchConfig({
+                    contributionPercentage: parseOptionalNumber(
                       event.target.value,
                     ),
-                  },
-                })
-              }}
-            />
-            <p className="mt-1.5 text-xs text-gray-600">
-              Applies only to this cost function. Switch Cost Functions in the
-              side nav to set a different percentage per function.
-            </p>
+                  })
+                }
+              />
+            </div>
+
+            <div className="min-w-[10rem] flex-1">
+              <Input
+                label="Escalation percentage"
+                type="number"
+                min={0}
+                step={0.1}
+                suffix="%"
+                required
+                placeholder="e.g. 5"
+                value={
+                  config.escalationPercent != null
+                    ? String(config.escalationPercent)
+                    : ''
+                }
+                error={errors.escalationPercent}
+                onChange={(event) =>
+                  patchConfig({
+                    escalationPercent: parseOptionalNumber(event.target.value),
+                  })
+                }
+              />
+            </div>
           </div>
-          </div>
+          <p className="text-xs text-gray-600">
+            After save, settings are stored via FunctionInvestmentType API and
+            the cost item form opens. Phase count still follows life of mine.
+          </p>
         </div>
       ) : (
         <div className="space-y-4 border-t border-portal-border pt-4">
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-portal-navy">
-              Contribution model
-            </legend>
-            <div className="grid gap-2 sm:max-w-md">
-              {/* {FULL_CONTRIBUTION_OPTIONS.map((model) => (
-                <RadioCard
-                  key={model.code}
-                  name="full-model"
-                  value={model.code}
-                  checked={config.fullContributionModel === model.code}
-                  label={model.label}
-                  onChange={() =>
-                    patchConfig({ fullContributionModel: model.code })
-                  }
-                />
-              ))} */}
-            </div>
-            {errors.fullContributionModel ? (
-              <p className="text-xs text-red-600" role="alert">
-                {errors.fullContributionModel}
-              </p>
-            ) : null}
-          </fieldset>
-
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Input
               label="Payback period"
@@ -402,6 +652,12 @@ export function OutsourcingPlaceholder({
               ) : null}
             </div>
           </div>
+          <p className="text-xs text-gray-600">
+            After save, settings are stored via FunctionInvestmentType API and
+            the cost item form opens. Phase values are not entered manually —
+            payback is distributed on the Overall sheet from the selected start
+            phase.
+          </p>
         </div>
       )}
 
@@ -409,8 +665,15 @@ export function OutsourcingPlaceholder({
         {savedMessage ? (
           <p className="mr-auto text-sm text-emerald-700">{savedMessage}</p>
         ) : null}
-        <Button type="button" variant="primary" onClick={handleSave}>
-          Save configuration
+        <Button
+          type="button"
+          variant="primary"
+          onClick={() => void handleSave()}
+          disabled={saving}
+        >
+          {saving
+            ? 'Saving…'
+            : 'Save & continue'}
         </Button>
       </div>
     </div>

@@ -1,17 +1,33 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Image from 'next/image'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 
+import {
+  getMineWiseFunctionList,
+  type MineFunction,
+} from '@/features/estimations/api/master'
+import { isUuid } from '@/features/estimations/api/investments/domain'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { routes } from '@/shared/config/routes'
-import { SECTOR_CATALOG } from '@/features/estimations/api/master'
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+function resolveMineId(
+  params: ReturnType<typeof useParams>,
+  pathname: string,
+): string {
+  const raw = params?.projectId
+  const fromParams = Array.isArray(raw) ? raw[0] : raw
+  if (fromParams) return decodeURIComponent(fromParams)
+
+  const match = pathname.match(/\/projects\/([^/]+)/)
+  return match?.[1] ? decodeURIComponent(match[1]) : ''
 }
 
 export interface MineSideNavProps {
@@ -19,16 +35,68 @@ export interface MineSideNavProps {
   className?: string
 }
 
-/** Mine/project-detail navigation: Home + Cost Functions by sector. */
+/** Mine/project-detail navigation: Home + Cost Functions (mine-wise API). */
 export function MineSideNav({ collapsed = false, className }: MineSideNavProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const params = useParams()
   const searchParams = useSearchParams()
   const [costFunctionsOpen, setCostFunctionsOpen] = useState(true)
+  const [functions, setFunctions] = useState<MineFunction[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const sectors = useMemo(() => SECTOR_CATALOG, [])
-  const activeSectorId =
-    searchParams.get('sector') || sectors[0]?.id || 'residential-buildings'
+  const mineId = useMemo(
+    () => resolveMineId(params, pathname),
+    [params, pathname],
+  )
+
+  useEffect(() => {
+    if (!mineId || !isUuid(mineId)) {
+      setFunctions([])
+      setLoading(false)
+      setLoadError(null)
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setLoadError(null)
+
+    void (async () => {
+      try {
+        const list = await getMineWiseFunctionList(mineId)
+        if (cancelled) return
+        setFunctions(list)
+      } catch (error) {
+        if (cancelled) return
+        setFunctions([])
+        setLoadError(
+          error instanceof Error ? error.message : 'Failed to load cost functions',
+        )
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [mineId])
+
+  const activeSectorId = searchParams.get('sector') || functions[0]?.function_master_id || ''
+
+  // Default the URL to the first mine function when none is selected yet.
+  useEffect(() => {
+    if (loading || functions.length === 0) return
+    const current = searchParams.get('sector')
+    if (current && functions.some((fn) => fn.function_master_id === current)) {
+      return
+    }
+    const next = new URLSearchParams(searchParams.toString())
+    next.set('sector', functions[0].function_master_id)
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false })
+  }, [loading, functions, searchParams, pathname, router])
 
   function selectSector(sectorId: string) {
     const next = new URLSearchParams(searchParams.toString())
@@ -101,25 +169,39 @@ export function MineSideNav({ collapsed = false, className }: MineSideNavProps) 
                 id="nav-section-cost-functions"
                 className="flex flex-col gap-0.5 pl-5"
               >
-                {sectors.map((sector) => {
-                  const isActive = sector.id === activeSectorId
-                  return (
-                    <li key={sector.id}>
-                      <button
-                        type="button"
-                        onClick={() => selectSector(sector.id)}
-                        className={cn(
-                          'flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-[14px] leading-snug transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40',
-                          isActive
-                            ? 'font-medium text-white'
-                            : 'hover:text-white font-extralight',
-                        )}  
-                      >
-                        Estimated Investment: {sector.name}
-                      </button>
-                    </li>
-                  )
-                })}
+                {loading ? (
+                  <li className="px-3 py-2.5 text-[13px] font-extralight text-white/70">
+                    Loading functions…
+                  </li>
+                ) : loadError ? (
+                  <li className="px-3 py-2.5 text-[13px] font-extralight text-red-200">
+                    {loadError}
+                  </li>
+                ) : !mineId || !isUuid(mineId) || functions.length === 0 ? (
+                  <li className="px-3 py-2.5 text-[13px] font-extralight text-white/70">
+                    No cost functions yet
+                  </li>
+                ) : (
+                  functions.map((fn) => {
+                    const isActive = fn.function_master_id === activeSectorId
+                    return (
+                      <li key={fn.function_master_id}>
+                        <button
+                          type="button"
+                          onClick={() => selectSector(fn.function_master_id)}
+                          className={cn(
+                            'flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-[14px] leading-snug transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40',
+                            isActive
+                              ? 'font-medium text-white'
+                              : 'hover:text-white font-extralight',
+                          )}
+                        >
+                          {fn.function_name}
+                        </button>
+                      </li>
+                    )
+                  })
+                )}
               </ul>
             ) : null}
           </div>

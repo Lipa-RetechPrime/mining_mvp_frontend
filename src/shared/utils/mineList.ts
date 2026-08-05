@@ -1,6 +1,10 @@
 /** Newest `updatedAt` first; missing dates sort last. Tie-break by name. */
 export function sortMinesByLastUpdated<
-  T extends { updatedAt?: string; siteSubtitle?: string },
+  T extends {
+    updatedAt?: string
+    mine_name?: string
+    siteSubtitle?: string
+  },
 >(mines: T[]): T[] {
   return [...mines].sort((a, b) => {
     const aTime = a.updatedAt ? Date.parse(a.updatedAt) : Number.NaN
@@ -10,7 +14,9 @@ export function sortMinesByLastUpdated<
     if (aValid && bValid && aTime !== bTime) return bTime - aTime
     if (aValid && !bValid) return -1
     if (!aValid && bValid) return 1
-    return (a.siteSubtitle || '').localeCompare(b.siteSubtitle || '')
+    const aName = a.mine_name || a.siteSubtitle || ''
+    const bName = b.mine_name || b.siteSubtitle || ''
+    return aName.localeCompare(bName)
   })
 }
 

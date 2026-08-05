@@ -8,6 +8,7 @@ import {
   invalidateEstimationsListCache,
   isStepPopulated,
   listEstimations,
+  scopeEstimationToInvestmentType,
   withMinePhaseLimit,
 } from "../api/investments";
 import { useToast } from "../context/ToastContext";
@@ -88,7 +89,16 @@ export interface UseEstimationListValue {
   loading: boolean;
   refresh: () => Promise<Estimation[]>;
   replaceItem: (item: Estimation) => void;
-  open: (id: string, entityId?: string) => Promise<void>;
+  open: (
+    id: string,
+    entityId?: string,
+    scope?: {
+      functionInvestmentTypeId?: string | null;
+      functionMasterId?: string | null;
+      includeLegacyNullFit?: boolean;
+      functionName?: string | null;
+    },
+  ) => Promise<void>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -137,20 +147,41 @@ export function useEstimationList(): UseEstimationListValue {
   }, []);
 
   const open = useCallback(
-    async (id: string, entityId?: string) => {
-      dispatch({ type: "SET_STATUS", status: "loading", message: "Loading…" });
+    async (
+      id: string,
+      entityId?: string,
+      scope?: {
+        functionInvestmentTypeId?: string | null
+        functionMasterId?: string | null
+        includeLegacyNullFit?: boolean
+        functionName?: string | null
+      },
+    ) => {
+      dispatch({ type: "SET_STATUS", status: "loading", message: "Loading…" })
       const fromList = items.find(
         (item) => item.id === id || item.mine_id === id,
-      );
-      let estimation = withActiveEntity(await getEstimation(id), entityId);
+      )
+      let estimation = withActiveEntity(await getEstimation(id), entityId)
       if (estimation.phaseLimit == null && fromList?.phaseLimit != null) {
-        estimation = withMinePhaseLimit(estimation, fromList.phaseLimit);
+        estimation = withMinePhaseLimit(estimation, fromList.phaseLimit)
       }
-      dispatch({ type: "SET_ESTIMATION", payload: estimation });
-      dispatch({ type: "SET_STATUS", status: "idle", message: "" });
+      if (scope?.functionInvestmentTypeId || scope?.functionMasterId) {
+        estimation = scopeEstimationToInvestmentType(
+          estimation,
+          scope.functionInvestmentTypeId,
+          scope.functionMasterId,
+          {
+            includeLegacyNullFit: scope.includeLegacyNullFit,
+            functionName: scope.functionName,
+          },
+        )
+      }
+      dispatch({ type: "SET_ESTIMATION", payload: estimation })
+      dispatch({ type: "SET_STATUS", status: "idle", message: "" })
     },
     [dispatch, items],
-  );
+  )
+
 
   const remove = useCallback(
     async (id: string) => {

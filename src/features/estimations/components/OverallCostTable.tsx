@@ -1,12 +1,24 @@
-import { buildOverallTableRows } from '../utils/overallTable'
+import { useMemo } from 'react'
+import {
+  buildOverallTableRows,
+  withFullPaybackOverlay,
+  withPartialPaybackOverlay,
+} from '../utils/overallTable'
 import { formatAmount } from '../utils/formatAmount'
 import type { OverallListData } from '../api/investments/types'
+import {
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
 
 function formatNum(value: number | null | undefined): string {
   return formatAmount(value)
 }
 
-function rowClassName(kind: ReturnType<typeof buildOverallTableRows>['rows'][number]['kind']): string {
+function rowClassName(
+  kind: ReturnType<typeof buildOverallTableRows>['rows'][number]['kind'],
+): string {
   switch (kind) {
     case 'section-header':
       return 'bg-gray-100 font-semibold text-[--color-portal-navy]'
@@ -22,8 +34,35 @@ function rowClassName(kind: ReturnType<typeof buildOverallTableRows>['rows'][num
 }
 
 /** Read-only overall sheet — electrification % is edited only on create/update mine forms. */
-export function OverallCostTable({ data }: { data: OverallListData }) {
-  const { rows, phaseColumns } = buildOverallTableRows(data)
+export function OverallCostTable({
+  data,
+  phaseLimit,
+}: {
+  data: OverallListData
+  /** Mine life-of-mine cap; payback distribution must not exceed this. */
+  phaseLimit?: number | null
+}) {
+  const outsourcing = useOutsourcingPartial()
+  const { rows, phaseColumns } = useMemo(() => {
+    const built = buildOverallTableRows(data)
+    if (isFullOutsourcing(outsourcing)) {
+      return withFullPaybackOverlay(built, {
+        escalationPercent: outsourcing.escalationPercent,
+        paybackPeriodYears: outsourcing.paybackPeriodYears,
+        paybackStartPhase: outsourcing.paybackStartPhase,
+        phaseLimit,
+      })
+    }
+    if (isPartialOutsourcing(outsourcing)) {
+      return withPartialPaybackOverlay(built, {
+        contributionPercentage: outsourcing.contributionPercentage,
+        escalationPercent: outsourcing.escalationPercent,
+        paybackPeriodYears: outsourcing.paybackPeriodYears,
+        phaseLimit,
+      })
+    }
+    return built
+  }, [data, outsourcing, phaseLimit])
 
   if (rows.length === 0) {
     return (
@@ -44,24 +83,24 @@ export function OverallCostTable({ data }: { data: OverallListData }) {
 
       <table className="w-full min-w-[880px] border-collapse text-left text-sm">
         <thead>
-          <tr className="border-b border-portal-border bg-gray-50/80 text-2xs font-semibold uppercase tracking-wide text-gray-500">
-            <th className="w-14 border border-portal-border px-2 py-2 text-center">Sl no</th>
-            <th className="min-w-[220px] border border-portal-border px-3 py-2">Details</th>
-            <th className="border border-portal-border px-3 py-2 text-right">Manpower</th>
-            <th className="border border-portal-border px-3 py-2 text-right">Qrts</th>
-            <th className="border border-portal-border px-3 py-2 text-right">Unit cost</th>
-            <th className="border border-portal-border px-3 py-2 text-right">Amount</th>
+          <tr className="border-b border-portal-border bg-gray-50/80 font-semibold uppercase tracking-wide text-[--text-color]">
+            <th className="w-14 border border-portal-border px-2 py-2 text-center  text-xs">Sl no</th>
+            <th className="min-w-[220px] border border-portal-border px-3 py-2 text-xs">Details</th>
+            <th className="border border-portal-border px-3 py-2 text-right text-xs">Manpower</th>
+            <th className="border border-portal-border px-3 py-2 text-right text-xs">Qrts</th>
+            <th className="border border-portal-border px-3 py-2 text-right text-xs">Unit cost</th>
+            <th className="border border-portal-border px-3 py-2 text-right text-xs">Amount</th>
             {phaseColumns.length > 0 ? (
               <th
                 colSpan={phaseColumns.length}
-                className="border border-portal-border px-3 py-2 text-center"
+                className="border border-portal-border px-3 py-2 text-center text-xs"
               >
                 Phasing of investment
               </th>
             ) : null}
           </tr>
           {phaseColumns.length > 0 ? (
-            <tr className="border-b border-portal-border bg-gray-50/80 text-2xs font-semibold uppercase tracking-wide text-gray-500">
+            <tr className="border-b border-portal-border bg-gray-50/80 font-semibold uppercase tracking-wide text-[--text-color]">
               <th colSpan={6} className="border border-portal-border px-2 py-1.5" />
               {phaseColumns.map((phaseType) => (
                 <th

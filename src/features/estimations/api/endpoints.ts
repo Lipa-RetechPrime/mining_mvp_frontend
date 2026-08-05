@@ -12,7 +12,15 @@ export const ENDPOINTS = {
     createPercentage: '/percentages/create',
     updatePercentage: '/percentages/update',
     getPercentage: '/percentages/get',
+    percentagesGetAll: '/percentages/get-all',
     functionAttributes: '/functions/attributes',
-    mineWiseFunctionList: '/functions/mine-wise-function-list'
+    mineWiseFunctionList: '/functions/mine-wise-function-list',
+    functionInvestmentTypeCreate: '/functions/investment-type/create',
+    functionInvestmentTypeUpdate: '/functions/investment-type/update',
+    functionInvestmentTypeDetails: '/functions/investment-type/details',
+  },
+  /** Mine listing only — Manage Existing must use this, never `investments.list`. */
+  mines: {
+    list: '/mines/list',
   },
 } as const

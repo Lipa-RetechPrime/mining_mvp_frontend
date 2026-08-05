@@ -8,6 +8,11 @@ import {
   formatAmountInput,
   parseFormattedAmount,
 } from '../utils/formatAmount'
+import { contributorPhaseAmount } from '@/features/projects/partialContribution'
+import {
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
 import type { Phase } from '../types/estimation'
 
 export function PhaseCard({
@@ -25,11 +30,21 @@ export function PhaseCard({
   onRemove?: () => void
   canRemove?: boolean
 }) {
+  const outsourcingPartial = useOutsourcingPartial()
   const isAuto = phase.calculationMode === 'automatic'
   const calculatedValue =
     isAuto && phase.percentage !== null
       ? computeAutomaticValue(stepAmount, phase.percentage)
       : phase.value
+
+  const displayPhaseValue = isAuto ? calculatedValue : phase.value
+  const contributorPct = isPartialOutsourcing(outsourcingPartial)
+    ? outsourcingPartial.contributionPercentage
+    : null
+  const contributorAmount = contributorPhaseAmount(
+    displayPhaseValue,
+    contributorPct,
+  )
 
   const [valueDraft, setValueDraft] = useState(() => formatAmount(phase.value))
   const valueFocused = useRef(false)
@@ -91,25 +106,58 @@ export function PhaseCard({
       <div className="h-9 w-5 shrink-0" aria-hidden />
     )
 
+  const outsourcingReadouts =
+    isPartialOutsourcing(outsourcingPartial) ? (
+      <>
+        <Input
+          className="min-w-0 basis-[5rem]"
+          type="text"
+          suffix="%"
+          readOnly
+          tabIndex={-1}
+          aria-readonly="true"
+          aria-label="Contributor percentage"
+          title="Contribution percentage from outsourcing configuration"
+          value={contributorPct != null ? String(contributorPct) : ''}
+        />
+        <Input
+          className="min-w-0 basis-[8rem]"
+          type="text"
+          inputMode="decimal"
+          suffix="lakhs"
+          readOnly
+          tabIndex={-1}
+          aria-readonly="true"
+          aria-label="Contributor amount"
+          title="Phase value × contributor percentage ÷ 100"
+          value={
+            contributorAmount != null ? formatAmount(contributorAmount) : ''
+          }
+        />
+      </>
+    ) : null
+
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 rounded-lg bg-white p-3">
       <RadioGroup
         name={`mode-${phase.id}`}
         legend="Calculation Mode"
         value={phase.calculationMode}
-        onChange={(v) => onChange({ calculationMode: v as Phase['calculationMode'] })}
+        onChange={(v) =>
+          onChange({ calculationMode: v as Phase['calculationMode'] })
+        }
         options={[
           { value: 'manual', label: 'Manual' },
           { value: 'automatic', label: 'Calculated' },
         ]}
       />
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {phaseLabel}
         {isAuto ? (
           <>
             <Input
-              className="min-w-0 flex-1 w-1"
+              className="min-w-3 basis-[5rem]"
               type="number"
               min={0}
               max={100}
@@ -120,12 +168,13 @@ export function PhaseCard({
               error={errors.percentage}
               onChange={(e) =>
                 onChange({
-                  percentage: e.target.value === '' ? null : Number(e.target.value),
+                  percentage:
+                    e.target.value === '' ? null : Number(e.target.value),
                 })
               }
             />
             <Input
-              className="min-w-0 basis-1/2"
+              className="min-w-0 basis-[10rem]"
               type="text"
               inputMode="decimal"
               suffix="lakhs"
@@ -134,7 +183,9 @@ export function PhaseCard({
               aria-readonly="true"
               aria-label="Calculated phase value"
               title="Calculated as Amount × percentage ÷ 100"
-              value={phase.percentage != null ? formatAmount(calculatedValue) : ''}
+              value={
+                phase.percentage != null ? formatAmount(calculatedValue) : ''
+              }
             />
           </>
         ) : (
@@ -157,6 +208,7 @@ export function PhaseCard({
             }}
           />
         )}
+        {outsourcingReadouts}
         {removeBtn}
       </div>
     </div>

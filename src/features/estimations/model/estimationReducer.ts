@@ -27,6 +27,8 @@ export interface EstimationState {
   statusMessage: string
   entitiesBySector: Record<string, EntityMaster[]>
   phaseTypes: PhaseTypeMaster[]
+  /** True after local edits since last load/save — used before delivery-mode switches. */
+  dirty: boolean
 }
 
 export type EstimationAction =
@@ -215,8 +217,26 @@ export function createInitialState(estimation: Estimation): EstimationState {
     statusMessage: '',
     entitiesBySector: {},
     phaseTypes: [],
+    dirty: false,
   }
 }
+
+const DIRTYING_ACTIONS = new Set<EstimationAction['type']>([
+  'ADD_BLOCK',
+  'UPDATE_STEP_FIELD',
+  'UPDATE_STEP_FIELD_LABEL',
+  'RECOMPUTE_STEP',
+  'SET_STEP_AMOUNT_MODE',
+  'SET_STEP_UNIT_COST_MODE',
+  'ADD_STEP',
+  'REMOVE_STEP',
+  'INIT_STEP_PHASES',
+  'SET_MINE_PHASE_LIMIT',
+  'SET_ELECTRIFICATION_PERCENT',
+  'ADD_PHASE',
+  'REMOVE_PHASE',
+  'UPDATE_PHASE',
+])
 
 export function estimationReducer(
   state: EstimationState,
@@ -224,7 +244,14 @@ export function estimationReducer(
 ): EstimationState {
   switch (action.type) {
     case 'SET_ESTIMATION':
-      return { ...state, estimation: action.payload, errors: {}, status: 'idle', statusMessage: '' }
+      return {
+        ...state,
+        estimation: action.payload,
+        errors: {},
+        status: 'idle',
+        statusMessage: '',
+        dirty: false,
+      }
     case 'SET_ENTITIES':
       return {
         ...state,
@@ -447,8 +474,27 @@ export function estimationReducer(
     case 'SET_ERRORS':
       return { ...state, errors: action.errors }
     case 'SET_STATUS':
-      return { ...state, status: action.status, statusMessage: action.message ?? '' }
+      return {
+        ...state,
+        status: action.status,
+        statusMessage: action.message ?? '',
+        dirty: action.status === 'saved' ? false : state.dirty,
+      }
     default:
       return state
   }
+}
+
+/** Mark workspace dirty after user edits (used by the store wrapper). */
+export function withDirtyFlag(
+  previous: EstimationState,
+  next: EstimationState,
+  actionType: EstimationAction['type'],
+): EstimationState {
+  if (actionType === 'SET_ESTIMATION') return { ...next, dirty: false }
+  if (actionType === 'SET_STATUS' && next.status === 'saved') {
+    return { ...next, dirty: false }
+  }
+  if (DIRTYING_ACTIONS.has(actionType)) return { ...next, dirty: true }
+  return next
 }
