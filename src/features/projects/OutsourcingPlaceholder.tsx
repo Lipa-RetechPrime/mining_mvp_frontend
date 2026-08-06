@@ -8,6 +8,8 @@ import {
   fitToFullSettings,
   fitToPartialSettings,
   getFunctionInvestmentTypeDetails,
+  softFullFieldsFromFit,
+  softPartialFieldsFromFit,
   type FunctionInvestmentTypeRecord,
   upsertFullOutsourcingConfig,
   upsertPartialOutsourcingConfig,
@@ -33,6 +35,61 @@ function parseOptionalNumber(raw: string): number | null {
   if (trimmed === '') return null
   const value = Number(trimmed)
   return Number.isFinite(value) ? value : null
+}
+
+/** Seed form values from in-memory settings (e.g. Edit config after save). */
+function configFromSettings(
+  settings: OutsourcingContributionSettings | null | undefined,
+): OutsourcingConfig {
+  if (!settings) return createEmptyOutsourcingConfig()
+  if (settings.kind === 'full') {
+    return {
+      ...createEmptyOutsourcingConfig(),
+      contributionKind: 'full',
+      paybackPeriodYears: settings.paybackPeriodYears,
+      escalationPercent: settings.escalationPercent,
+      paybackStartPhase: settings.paybackStartPhase,
+    }
+  }
+  if (settings.kind === 'adhoc') {
+    return {
+      ...createEmptyOutsourcingConfig(),
+      contributionKind: 'adhoc',
+    }
+  }
+  return {
+    ...createEmptyOutsourcingConfig(),
+    contributionKind: 'partial',
+    paybackPeriodYears: settings.paybackPeriodYears,
+    contributionPercentage: settings.contributionPercentage,
+    escalationPercent: settings.escalationPercent,
+  }
+}
+
+function configFromPartialFit(
+  record: FunctionInvestmentTypeRecord | null,
+): OutsourcingConfig {
+  const soft = softPartialFieldsFromFit(record)
+  return {
+    ...createEmptyOutsourcingConfig(),
+    contributionKind: 'partial',
+    paybackPeriodYears: soft?.paybackPeriodYears ?? null,
+    contributionPercentage: soft?.contributionPercentage ?? null,
+    escalationPercent: soft?.escalationPercent ?? null,
+  }
+}
+
+function configFromFullFit(
+  record: FunctionInvestmentTypeRecord | null,
+): OutsourcingConfig {
+  const soft = softFullFieldsFromFit(record)
+  return {
+    ...createEmptyOutsourcingConfig(),
+    contributionKind: 'full',
+    paybackPeriodYears: soft?.paybackPeriodYears ?? null,
+    escalationPercent: soft?.escalationPercent ?? null,
+    paybackStartPhase: soft?.paybackStartPhase ?? null,
+  }
 }
 
 function RadioCard({
@@ -87,12 +144,18 @@ export function OutsourcingPlaceholder({
   projectId,
   projectName,
   phaseTypes = [],
+  /** Avoid blanking while the mine-wise function list loads again. */
+  functionOptions,
+  /** Prefill from session/parent while API details reload (Edit config). */
+  initialSettings = null,
   onChangeMode,
   onContinueToEstimation,
 }: {
   projectId: string
   projectName: string
   phaseTypes?: PhaseTypeMaster[]
+  functionOptions?: { id: string; name: string }[]
+  initialSettings?: OutsourcingContributionSettings | null
   onChangeMode?: () => void
   /** After a valid save, hand settings to the parent so the cost-item form opens. */
   onContinueToEstimation?: (
@@ -102,13 +165,15 @@ export function OutsourcingPlaceholder({
 }) {
   const searchParams = useSearchParams()
   const [config, setConfig] = useState<OutsourcingConfig>(() =>
-    createEmptyOutsourcingConfig(),
+    configFromSettings(initialSettings),
   )
   const [errors, setErrors] = useState<OutsourcingFieldErrors>({})
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [fitId, setFitId] = useState<string | null>(null)
+  const [fitId, setFitId] = useState<string | null>(
+    () => initialSettings?.functionInvestmentTypeId ?? null,
+  )
   const [partialFitId, setPartialFitId] = useState<string | null>(null)
   const [fullFitId, setFullFitId] = useState<string | null>(null)
   const [adhocFitId, setAdhocFitId] = useState<string | null>(null)
@@ -116,10 +181,15 @@ export function OutsourcingPlaceholder({
     useState<FunctionInvestmentTypeRecord | null>(null)
   const [fullFitRecord, setFullFitRecord] =
     useState<FunctionInvestmentTypeRecord | null>(null)
-  const [functionCatalog, setFunctionCatalog] = useState<{ id: string; name: string }[]>([])
-
+  const [functionCatalog, setFunctionCatalog] = useState<
+    { id: string; name: string }[]
+  >(() => functionOptions ?? [])
 
   useEffect(() => {
+    if (functionOptions) {
+      setFunctionCatalog(functionOptions)
+      return
+    }
     let cancelled = false
     void (async () => {
       try {
@@ -138,7 +208,7 @@ export function OutsourcingPlaceholder({
     return () => {
       cancelled = true
     }
-  }, [projectId])
+  }, [projectId, functionOptions])
 
   const sectorParam = searchParams.get('sector') || ''
   const currentFunctionId = useMemo(() => {
@@ -158,16 +228,12 @@ export function OutsourcingPlaceholder({
 
   useEffect(() => {
     if (!projectId || !currentFunctionId) {
-      setConfig(createEmptyOutsourcingConfig())
-      setFitId(null)
-      setPartialFitId(null)
-      setFullFitId(null)
-      setAdhocFitId(null)
-      setPartialFitRecord(null)
-      setFullFitRecord(null)
-      setErrors({})
-      setSavedMessage(null)
-      setHydrated(Boolean(projectId))
+      // Wait for the function catalog — never blank saved fields while loading.
+      if (!projectId) {
+        setHydrated(false)
+        return
+      }
+      setHydrated(true)
       return
     }
 
@@ -204,50 +270,46 @@ export function OutsourcingPlaceholder({
         const partialSettings = fitToPartialSettings(partialFit)
         const preferred =
           getPreferredOutsourcingKind(currentFunctionId) ??
-          (partialSettings ? 'partial' : fullSettings ? 'full' : adhocId ? 'adhoc' : 'partial')
+          (partialSettings
+            ? 'partial'
+            : fullSettings
+              ? 'full'
+              : adhocId
+                ? 'adhoc'
+                : partialFit
+                  ? 'partial'
+                  : fullFit
+                    ? 'full'
+                    : 'partial')
 
-        if (preferred === 'full' && fullSettings) {
+        // Prefill from API soft fields whenever a FIT row exists (not only when complete).
+        if (preferred === 'full' && fullFit) {
           setFitId(fullId)
-          setConfig({
-            ...createEmptyOutsourcingConfig(),
-            contributionKind: 'full',
-            paybackPeriodYears: fullSettings.paybackPeriodYears,
-            escalationPercent: fullSettings.escalationPercent,
-            paybackStartPhase: fullSettings.paybackStartPhase,
-          })
-        } else if (preferred === 'partial' && partialSettings) {
+          setConfig(configFromFullFit(fullFit))
+        } else if (preferred === 'partial' && partialFit) {
           setFitId(partialId)
-          setConfig({
-            ...createEmptyOutsourcingConfig(),
-            contributionKind: 'partial',
-            paybackPeriodYears: partialSettings.paybackPeriodYears,
-            contributionPercentage: partialSettings.contributionPercentage,
-            escalationPercent: partialSettings.escalationPercent,
-          })
-        } else if (preferred === 'adhoc') {
+          setConfig(configFromPartialFit(partialFit))
+        } else if (preferred === 'adhoc' && adhocId) {
           setFitId(adhocId)
           setConfig({
             ...createEmptyOutsourcingConfig(),
             contributionKind: 'adhoc',
           })
-        } else if (partialSettings) {
+        } else if (partialFit && softPartialFieldsFromFit(partialFit)) {
           setFitId(partialId)
-          setConfig({
-            ...createEmptyOutsourcingConfig(),
-            contributionKind: 'partial',
-            paybackPeriodYears: partialSettings.paybackPeriodYears,
-            contributionPercentage: partialSettings.contributionPercentage,
-            escalationPercent: partialSettings.escalationPercent,
-          })
-        } else if (fullSettings) {
+          setConfig(configFromPartialFit(partialFit))
+        } else if (fullFit) {
           setFitId(fullId)
+          setConfig(configFromFullFit(fullFit))
+        } else if (adhocId) {
+          setFitId(adhocId)
           setConfig({
             ...createEmptyOutsourcingConfig(),
-            contributionKind: 'full',
-            paybackPeriodYears: fullSettings.paybackPeriodYears,
-            escalationPercent: fullSettings.escalationPercent,
-            paybackStartPhase: fullSettings.paybackStartPhase,
+            contributionKind: 'adhoc',
           })
+        } else if (initialSettings) {
+          setFitId(initialSettings.functionInvestmentTypeId)
+          setConfig(configFromSettings(initialSettings))
         } else {
           setFitId(null)
           setConfig(createEmptyOutsourcingConfig())
@@ -256,13 +318,19 @@ export function OutsourcingPlaceholder({
         setSavedMessage(null)
       } catch {
         if (cancelled) return
-        setFitId(null)
-        setPartialFitId(null)
-        setFullFitId(null)
-        setAdhocFitId(null)
-        setPartialFitRecord(null)
-        setFullFitRecord(null)
-        setConfig(createEmptyOutsourcingConfig())
+        // On API failure keep seeded parent settings rather than wiping the form.
+        if (initialSettings) {
+          setConfig(configFromSettings(initialSettings))
+          setFitId(initialSettings.functionInvestmentTypeId)
+        } else {
+          setFitId(null)
+          setPartialFitId(null)
+          setFullFitId(null)
+          setAdhocFitId(null)
+          setPartialFitRecord(null)
+          setFullFitRecord(null)
+          setConfig(createEmptyOutsourcingConfig())
+        }
       } finally {
         if (!cancelled) setHydrated(true)
       }
@@ -271,7 +339,7 @@ export function OutsourcingPlaceholder({
     return () => {
       cancelled = true
     }
-  }, [projectId, currentFunctionId])
+  }, [projectId, currentFunctionId, initialSettings])
 
   // Clear field-level escalation errors when switching cost functions in the nav.
   useEffect(() => {
@@ -301,27 +369,13 @@ export function OutsourcingPlaceholder({
     setSavedMessage(null)
     setErrors({})
     if (kind === 'partial') {
-      const settings = fitToPartialSettings(partialFitRecord)
       setFitId(partialFitId)
-      setConfig({
-        ...createEmptyOutsourcingConfig(),
-        contributionKind: 'partial',
-        paybackPeriodYears: settings?.paybackPeriodYears ?? null,
-        contributionPercentage: settings?.contributionPercentage ?? null,
-        escalationPercent: settings?.escalationPercent ?? null,
-      })
+      setConfig(configFromPartialFit(partialFitRecord))
       return
     }
     if (kind === 'full') {
-      const settings = fitToFullSettings(fullFitRecord)
       setFitId(fullFitId)
-      setConfig({
-        ...createEmptyOutsourcingConfig(),
-        contributionKind: 'full',
-        paybackPeriodYears: settings?.paybackPeriodYears ?? null,
-        escalationPercent: settings?.escalationPercent ?? null,
-        paybackStartPhase: settings?.paybackStartPhase ?? null,
-      })
+      setConfig(configFromFullFit(fullFitRecord))
       return
     }
     setFitId(adhocFitId)
