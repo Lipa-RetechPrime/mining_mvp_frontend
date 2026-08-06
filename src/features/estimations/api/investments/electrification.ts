@@ -259,3 +259,50 @@ export async function savePercentagesForEntities(
 
   return masterIds
 }
+
+export type MinePercentagesResponse = {
+  success?: boolean
+  statusCode?: number
+  message?: string
+  data?: PercentageRecord[] | unknown
+}
+
+/** GET /percentages/get-all/:mineId */
+export async function getPercentagesByMine(
+  mineId: string,
+): Promise<PercentageRecord[]> {
+  const mine_id = mineId?.trim()
+  if (!mine_id) return []
+
+  const data = await fetchFromBackend<MinePercentagesResponse>(
+    `${ENDPOINTS.investments.percentagesGetAll}/${mine_id}`,
+  )
+  if (data.success === false) {
+    throw new Error(data.message || 'Failed to load percentages for mine')
+  }
+
+  const rows = Array.isArray(data.data) ? data.data : []
+  return rows
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null
+      const record = row as {
+        percentage_master_id?: string
+        mine_id?: string
+        entity_id?: string
+        percentage?: number
+      }
+      const percentage_master_id = record.percentage_master_id?.trim()
+      const entity_id = record.entity_id?.trim()
+      if (!percentage_master_id || !entity_id) return null
+      return {
+        percentage_master_id,
+        mine_id: record.mine_id?.trim() || mine_id,
+        entity_id,
+        percentage:
+          record.percentage != null && Number.isFinite(Number(record.percentage))
+            ? Number(record.percentage)
+            : 0,
+      } satisfies PercentageRecord
+    })
+    .filter((row): row is PercentageRecord => row != null)
+}

@@ -8,6 +8,7 @@ import { createEstimation, updateEstimation } from "../api/investments";
 import { useToast } from "../context/ToastContext";
 import { isValid, validateEstimation } from "../utils/validation";
 import type { Estimation } from "../types/estimation";
+import type { PhaseValidationMode } from "../utils/validation";
 import {
   useEstimationDispatch,
   useEstimationState,
@@ -59,14 +60,23 @@ export interface UseSubmitEstimationValue {
   submitting: boolean;
 }
 
-export function useSubmitEstimation(): UseSubmitEstimationValue {
+export function useSubmitEstimation(options?: {
+  phaseValidationMode?: PhaseValidationMode;
+  /** @deprecated Prefer phaseValidationMode: 'full' */
+  skipPhaseAmountValidation?: boolean;
+}): UseSubmitEstimationValue {
   const { estimation, status } = useEstimationState();
   const dispatch = useEstimationDispatch();
   const { success, error } = useToast();
+  const phaseValidationMode: PhaseValidationMode =
+    options?.phaseValidationMode ??
+    (options?.skipPhaseAmountValidation ? "full" : "strict");
 
   async function submit() {
     const prepared = recomputeAll(estimation);
-    const errors = validateEstimation(prepared);
+    const errors = validateEstimation(prepared, {
+      phaseValidationMode,
+    });
     dispatch({ type: "SET_ERRORS", errors });
     if (!isValid(errors)) {
       const sumMessages = Object.entries(errors)
@@ -93,7 +103,10 @@ export function useSubmitEstimation(): UseSubmitEstimationValue {
     try {
       const saved = isCreate
         ? await createEstimation(prepared)
-        : await updateEstimation(prepared.mine_id || prepared.id!, prepared);
+        : await updateEstimation(prepared.mine_id || prepared.id!, prepared, {
+            phaseValidationMode,
+            skipPhaseAmountValidation: phaseValidationMode === "full",
+          });
       dispatch({ type: "SET_ESTIMATION", payload: saved });
       dispatch({
         type: "SET_STATUS",

@@ -11,6 +11,7 @@ import {
 } from './mappers'
 import {
   appendCostItem,
+  asUuidOrNull,
   cleanUuid,
   isStepPopulated,
   isUuid,
@@ -179,8 +180,14 @@ function resolvePersistEntityId(
   return isUuid(tab.entityId) ? cleanUuid(tab.entityId) : null
 }
 
-function assertEstimationValidForSave(estimation: Estimation): void {
-  const errors = validateEstimation(estimation)
+function assertEstimationValidForSave(
+  estimation: Estimation,
+  options?: {
+    phaseValidationMode?: 'strict' | 'partial' | 'full'
+    skipPhaseAmountValidation?: boolean
+  },
+): void {
+  const errors = validateEstimation(estimation, options)
   if (isValid(errors)) return
   const messages = Object.values(errors)
   throw new Error(messages[0] ?? 'Validation failed')
@@ -342,11 +349,32 @@ async function updateExistingMineByName(body: Estimation): Promise<Estimation> {
 }
 
 export async function createEstimation(body: Estimation): Promise<Estimation> {
+  const fitId = body.functionInvestmentTypeId?.trim()
+  if (!fitId) {
+    throw new Error(
+      'Select Ownership or save Outsourcing configuration before saving cost items.',
+    )
+  }
   invalidateEstimationsListCache()
   const id = body.id || `est-${generateUuid()}`
   const now = new Date().toISOString()
-  const prepared: Estimation = withApiIds({
+  const stamped: Estimation = {
     ...body,
+    functionInvestmentTypeId: fitId,
+    blocks: body.blocks.map((block) => ({
+      ...block,
+      entityTabs: block.entityTabs.map((tab) => ({
+        ...tab,
+        steps: tab.steps.map((step) => ({
+          ...step,
+          functionInvestmentTypeId: fitId,
+          functionMasterId: block.sectorId || step.functionMasterId || null,
+        })),
+      })),
+    })),
+  }
+  const prepared: Estimation = withApiIds({
+    ...stamped,
     id,
     createdAt: now,
     updatedAt: now,
@@ -457,15 +485,44 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
   return { ...created, percentageMasterIdByEntity }
 }
 
-export async function updateEstimation(id: string, body: Estimation): Promise<Estimation> {
+export async function updateEstimation(
+  id: string,
+  body: Estimation,
+  options?: {
+    phaseValidationMode?: 'strict' | 'partial' | 'full'
+    skipPhaseAmountValidation?: boolean
+  },
+): Promise<Estimation> {
+  const fitId = body.functionInvestmentTypeId?.trim()
+  if (!fitId) {
+    throw new Error(
+      'Select Ownership or save Outsourcing configuration before saving cost items.',
+    )
+  }
   const mine_id = body.mine_id || id
   if (!mine_id) {
     throw new Error('Estimation is missing mine_id')
   }
 
+  const stamped: Estimation = {
+    ...body,
+    functionInvestmentTypeId: fitId,
+    blocks: body.blocks.map((block) => ({
+      ...block,
+      entityTabs: block.entityTabs.map((tab) => ({
+        ...tab,
+        steps: tab.steps.map((step) => ({
+          ...step,
+          functionInvestmentTypeId: fitId,
+          functionMasterId: block.sectorId || step.functionMasterId || null,
+        })),
+      })),
+    })),
+  }
+
   const orderedBody = ensureEntityTabs(
-    body,
-    await getEntities(body.blocks[0]?.sectorId || 'residential-buildings'),
+    stamped,
+    await getEntities(stamped.blocks[0]?.sectorId || 'residential-buildings'),
   )
 
   const updated: Estimation = withApiIds({
@@ -478,8 +535,12 @@ export async function updateEstimation(id: string, body: Estimation): Promise<Es
     updatedAt: new Date().toISOString(),
   })
 
-  assertEstimationValidForSave(updated)
+  assertEstimationValidForSave(updated, options)
 
+  // Do not merge peer FIT rows into this PUT. Nest update DTOs reject per-item
+  // FIT fields, so re-sent peer items get stamped as the active type and
+  // duplicate on the overall sheet. Isolation relies on top-level
+  // function_investment_type_id (backend must not delete other FIT rows).
   const payload = mapEstimationToDto(updated, 'update')
   try {
     invalidateEstimationsListCache()
@@ -677,27 +738,58 @@ const overallInflight = new Map<string, Promise<OverallListData>>()
 const overallCache = new Map<string, { at: number; data: OverallListData }>()
 const OVERALL_CACHE_TTL_MS = 1500
 
+function overallCacheKey(
+  mineId: string,
+  functionMasterId: string,
+  functionInvestmentTypeId?: string | null,
+): string {
+  return `${mineId}:${functionMasterId}:${functionInvestmentTypeId ?? ''}`
+}
+
 export function invalidateOverallListCache(mineId?: string): void {
   if (mineId) {
-    overallInflight.delete(mineId)
-    overallCache.delete(mineId)
+    for (const key of [...overallInflight.keys()]) {
+      if (key === mineId || key.startsWith(`${mineId}:`)) {
+        overallInflight.delete(key)
+      }
+    }
+    for (const key of [...overallCache.keys()]) {
+      if (key === mineId || key.startsWith(`${mineId}:`)) {
+        overallCache.delete(key)
+      }
+    }
     return
   }
   overallInflight.clear()
   overallCache.clear()
 }
 
-export async function fetchOverallList(mineId: string): Promise<OverallListData> {
-  if (!mineId) {
-    throw new Error('Estimation is missing mine_id')
+export async function fetchOverallList(
+  mineId: string,
+  functionMasterId: string,
+  functionInvestmentTypeId?: string | null,
+): Promise<OverallListData> {
+  const cleanedMineId = asUuidOrNull(mineId)
+  const cleanedFunctionId = asUuidOrNull(functionMasterId)
+  const cleanedFitId = asUuidOrNull(functionInvestmentTypeId ?? '')
+  if (!cleanedMineId) {
+    throw new Error('Estimation is missing a valid mine_id')
+  }
+  if (!cleanedFunctionId) {
+    throw new Error('Select a cost function (valid function_master_id) to load overall')
   }
 
-  const cached = overallCache.get(mineId)
+  const cacheKey = overallCacheKey(
+    cleanedMineId,
+    cleanedFunctionId,
+    cleanedFitId,
+  )
+  const cached = overallCache.get(cacheKey)
   if (cached && Date.now() - cached.at < OVERALL_CACHE_TTL_MS) {
     return cached.data
   }
 
-  const existing = overallInflight.get(mineId)
+  const existing = overallInflight.get(cacheKey)
   if (existing) return existing
 
   const request = (async () => {
@@ -705,7 +797,13 @@ export async function fetchOverallList(mineId: string): Promise<OverallListData>
       ENDPOINTS.investments.overallList,
       {
         method: 'POST',
-        json: { mine_id: mineId },
+        json: {
+          mine_id: cleanedMineId,
+          function_master_id: cleanedFunctionId,
+          ...(cleanedFitId
+            ? { function_investment_type_id: cleanedFitId }
+            : {}),
+        },
       },
     )
     assertApiSuccess(data, 'Failed to load overall list')
@@ -751,12 +849,47 @@ export async function fetchOverallList(mineId: string): Promise<OverallListData>
                 ? Number((entity as { design_10_percent?: number | null }).design_10_percent)
                 : entity.design_percent
 
+        // When the API returns mixed FIT rows with per-item FIT ids, keep only
+        // the active type. If items omit FIT ids, trust the request filter.
+        const rawItems = entity.costItems ?? []
+        const hasItemFit = rawItems.some(
+          (item) => Boolean(item.function_investment_type_id?.trim()),
+        )
+        const filteredItems =
+          cleanedFitId && hasItemFit
+            ? rawItems.filter(
+                (item) =>
+                  item.function_investment_type_id?.trim() === cleanedFitId,
+              )
+            : rawItems
+
+        // Collapse exact duplicates (same id, or identical values from bad merges).
+        const seen = new Set<string>()
+        const costItems = filteredItems.filter((item) => {
+          const id = item.cost_item_id?.trim()
+          const key =
+            id ||
+            [
+              item.name,
+              item.manpower,
+              item.qrts,
+              item.unit_cost,
+              item.amount,
+              JSON.stringify(item.phases ?? {}),
+            ].join('|')
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+
         return {
           ...entity,
           percentage,
           design_percent: designAmount ?? entity.design_percent,
+          costItems,
         }
       })
+      .filter((entity) => (entity.costItems?.length ?? 0) > 0)
       .sort((a, b) => compareEntityCodes(a.entity_name, b.entity_name))
 
     const normalized: OverallListData = {
@@ -764,12 +897,12 @@ export async function fetchOverallList(mineId: string): Promise<OverallListData>
       entities,
       electrification_percent,
     }
-    overallCache.set(mineId, { at: Date.now(), data: normalized })
+    overallCache.set(cacheKey, { at: Date.now(), data: normalized })
     return normalized
   })().finally(() => {
-    overallInflight.delete(mineId)
+    overallInflight.delete(cacheKey)
   })
 
-  overallInflight.set(mineId, request)
+  overallInflight.set(cacheKey, request)
   return request
 }

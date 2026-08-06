@@ -6,6 +6,11 @@ import {
   nextPhaseBatchCount,
 } from '../phases/phaseTypes'
 import { phaseAmountSumError } from '../utils/validation'
+import {
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
 import type { Phase, Step } from '../types/estimation'
 
 export function PhaseGrid({
@@ -27,13 +32,34 @@ export function PhaseGrid({
   onAddPhase: () => void
   onRemovePhase: (phaseId: string) => void
 }) {
+  const outsourcing = useOutsourcingPartial()
+  if (isFullOutsourcing(outsourcing)) {
+    return (
+      <section>
+        <div className="mb-1">
+          <h4 className="text-[15px] font-semibold text-[--color-portal-navy]">
+            Phasing of Investment
+          </h4>
+          <p className="mt-1 text-sm font-normal text-[--text-color]">
+            Phase entry is read-only for Full contribution. Payables are
+            distributed on the Overall sheet from the configured start phase
+            across the payback period.
+          </p>
+        </div>
+      </section>
+    )
+  }
+
+  const isPartial = isPartialOutsourcing(outsourcing)
   const phaseLimit = minePhaseLimit ?? step.phaseLimit ?? null
   const canAddMore = canAddPhase(step.phases.length, phaseLimit)
   const remaining =
     phaseLimit != null ? Math.max(0, Math.floor(phaseLimit) - step.phases.length) : 0
   const addCount = nextPhaseBatchCount(step.phases.length, phaseLimit)
   const sumError =
-    phaseAmountSumError(step) ?? errors[`${errorPrefix}.phaseAmountSum`] ?? null
+    phaseAmountSumError(step, isPartial ? 'partial' : 'strict') ??
+    errors[`${errorPrefix}.phaseAmountSum`] ??
+    null
   const overLimitError = errors[`${errorPrefix}.phaseLimit`] ?? null
   const limitMissing = phaseLimit == null
   const canRemovePhase = step.phases.length > 0
@@ -44,8 +70,9 @@ export function PhaseGrid({
         <div className="min-w-0">
           <h4 className="text-[15px] font-semibold text-[--color-portal-navy]">Phasing of Investment</h4>
           <p className="mt-1 text-sm font-normal text-[--text-color]">
-            Allocate cash flows across phases. Add up to {PHASE_ADD_BATCH_SIZE} phases at a time,
-            never more than the mine life.
+            {isPartial
+              ? 'Enter phase values for the contributor share. Phase values do not need to sum to Amount — the remainder plus escalation is distributed on the Overall sheet.'
+              : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
           </p>
           {sumError ? (
             <p className="mt-1.5 text-sm text-red-600" role="alert">

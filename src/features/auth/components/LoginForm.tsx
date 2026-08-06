@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 import { Button } from "@/shared/components/ui/Button";
@@ -9,11 +9,9 @@ import { IconField } from "@/shared/components/ui/IconField";
 import { routes } from "@/shared/config/routes";
 
 import { useAuth } from "../hooks/use-auth";
-import { readReturnPath } from "../utils/return-path";
 
 export function LoginForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { login, status, error, clearError } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,7 +23,8 @@ export function LoginForm() {
 
     try {
       await login(email, password);
-      router.replace(readReturnPath(searchParams, routes.dashboard));
+      // Always land on dashboard with the main app menu after login.
+      router.replace(routes.dashboard);
     } catch (err) {
       console.error(err);
     }

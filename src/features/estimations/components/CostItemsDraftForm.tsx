@@ -14,6 +14,11 @@ import {
 } from '../phases/phaseTypes'
 import { isValid, validateStep } from '../utils/validation'
 import { useToast } from '../context/ToastContext'
+import {
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
 import type { FieldErrors, PhaseTypeMaster, Step } from '../types/estimation'
 
 function recomputeStep(step: Step): Step {
@@ -97,7 +102,7 @@ export function CostItemsDraftForm({
   entityId: string
   entityCode?: string
   minePhaseLimit: number | null | undefined
-  /** Existing design % for this entity — prefilled when adding more cost items. */
+  /** Saved design % for this entity — used on submit if the input is left blank; never shown as a default. */
   electrificationPercent?: number | null
   onSubmit: (
     steps: Step[],
@@ -108,6 +113,12 @@ export function CostItemsDraftForm({
 }) {
   void _phaseTypes
   const { success } = useToast()
+  const outsourcing = useOutsourcingPartial()
+  const phaseValidationMode = isFullOutsourcing(outsourcing)
+    ? 'full'
+    : isPartialOutsourcing(outsourcing)
+      ? 'partial'
+      : 'strict'
   const [initialDraft] = useState(() => createExpandedDraft(minePhaseLimit))
   const [steps, setSteps] = useState<Step[]>([initialDraft.step])
   const [errors, setErrors] = useState<FieldErrors>({})
@@ -116,34 +127,19 @@ export function CostItemsDraftForm({
   const [collapsedById, setCollapsedById] = useState<Record<string, boolean>>(
     initialDraft.collapsedById,
   )
-  const [percent, setPercent] = useState<number | null>(() =>
-    electrificationPercent != null && Number.isFinite(electrificationPercent)
-      ? electrificationPercent
-      : null,
-  )
+  // Always start blank — do not copy a previously saved entity %.
+  // On submit, fall back to a saved entity % only if the field is left empty.
+  const [percent, setPercent] = useState<number | null>(null)
   const [pendingRemove, setPendingRemove] = useState<{
     stepId: string
     stepNumber: number
     details: string
   } | null>(null)
 
-  // Keep local draft in sync when switching entity or when parent stores a saved %.
   const [prevEntityId, setPrevEntityId] = useState(entityId)
-  const [prevPropPercent, setPrevPropPercent] = useState(electrificationPercent)
   if (entityId !== prevEntityId) {
     setPrevEntityId(entityId)
-    setPrevPropPercent(electrificationPercent)
-    setPercent(
-      electrificationPercent != null && Number.isFinite(electrificationPercent)
-        ? electrificationPercent
-        : null,
-    )
-  } else if (electrificationPercent !== prevPropPercent) {
-    setPrevPropPercent(electrificationPercent)
-    // Prefill from saved entity %; don't clear a typed draft if parent is still empty.
-    if (electrificationPercent != null && Number.isFinite(electrificationPercent)) {
-      setPercent(electrificationPercent)
-    }
+    setPercent(null)
   }
 
   const [prevMinePhaseLimit, setPrevMinePhaseLimit] = useState(minePhaseLimit)
@@ -168,9 +164,19 @@ export function CostItemsDraftForm({
     const prepared = steps.map(recomputeStep)
     const nextErrors: FieldErrors = {}
     for (const step of prepared) {
-      validateStep(step, nextErrors, blockId, entityId, minePhaseLimit)
+      validateStep(step, nextErrors, blockId, entityId, minePhaseLimit, {
+        phaseValidationMode,
+      })
     }
-    if (percent == null || !Number.isFinite(percent) || percent < 0) {
+    const savedPercent =
+      electrificationPercent != null && Number.isFinite(electrificationPercent)
+        ? electrificationPercent
+        : null
+    const effectivePercent =
+      percent != null && Number.isFinite(percent) && percent >= 0
+        ? percent
+        : savedPercent
+    if (effectivePercent == null || effectivePercent < 0) {
       nextErrors[`electrificationPercent.${entityId}`] =
         `Design / electrification percent is required for ${entityCode ?? 'this entity'}`
     }
@@ -179,9 +185,10 @@ export function CostItemsDraftForm({
 
     setSaving(true)
     try {
-      await onSubmit(prepared, percent)
+      await onSubmit(prepared, effectivePercent)
       const next = createExpandedDraft(minePhaseLimit)
       setSteps([next.step])
+      setPercent(null)
       setErrors({})
       setCollapsedById(next.collapsedById)
     } finally {

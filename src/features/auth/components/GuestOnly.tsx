@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import { routes } from "@/shared/config/routes";
 
 import { useAuth } from "../hooks/use-auth";
 import { useIsClient } from "../hooks/use-is-client";
-import { readReturnPath } from "../utils/return-path";
 import { AuthStatusFallback } from "./AuthStatusFallback";
 
 export interface GuestOnlyProps {
@@ -20,7 +19,6 @@ export interface GuestOnlyProps {
  */
 export function GuestOnly({ children }: GuestOnlyProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { hydrated, isAuthenticated } = useAuth();
   const isClient = useIsClient();
 
@@ -29,8 +27,8 @@ export function GuestOnly({ children }: GuestOnlyProps) {
       return;
     }
 
-    router.replace(readReturnPath(searchParams, routes.dashboard));
-  }, [isClient, hydrated, isAuthenticated, router, searchParams]);
+    router.replace(routes.dashboard);
+  }, [isClient, hydrated, isAuthenticated, router]);
 
   if (!isClient || !hydrated) {
     return <AuthStatusFallback />;

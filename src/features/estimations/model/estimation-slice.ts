@@ -2,6 +2,7 @@ import type { Estimation, PhaseTypeMaster } from "../types/estimation";
 import {
   createInitialState,
   estimationReducer as pocEstimationReducer,
+  withDirtyFlag,
   type EstimationAction,
   type EstimationState,
 } from "./estimationReducer";
@@ -54,7 +55,9 @@ export function estimationReducer(
   if (!KNOWN_ACTION_TYPES.has(action.type as EstimationAction["type"])) {
     return current;
   }
-  return pocEstimationReducer(current, action as EstimationAction);
+  const typed = action as EstimationAction;
+  const next = pocEstimationReducer(current, typed);
+  return withDirtyFlag(current, next, typed.type);
 }
 
 export const setEstimation = (payload: Estimation) =>

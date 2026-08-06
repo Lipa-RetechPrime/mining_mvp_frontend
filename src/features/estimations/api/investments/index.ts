@@ -19,6 +19,7 @@ export type {
 export {
   appendCostItem,
   applyMinePhaseLimitToBlocks,
+  asUuidOrNull,
   cleanUuid,
   isStepPopulated,
   isUuid,
@@ -31,6 +32,8 @@ export {
   ensureEntityTabs,
   mapDtoToEstimation,
   mapEstimationToDto,
+  mergePreservedFitSteps,
+  scopeEstimationToInvestmentType,
   withDerivedAutomaticPercentages,
   withMasterEntityTabs,
 } from './mappers'
@@ -55,6 +58,8 @@ export {
 
 export {
   createPercentage,
+  getPercentage,
+  getPercentagesByMine,
   savePercentagesForEntities,
   updatePercentage,
 } from './electrification'

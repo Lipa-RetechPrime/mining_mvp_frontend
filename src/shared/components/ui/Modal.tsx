@@ -13,12 +13,17 @@ function cn(...inputs: ClassValue[]) {
 export interface ModalProps {
     open: boolean
     title: ReactNode
-    onClose: () => void
+    onClose?: () => void
     children: ReactNode
     footer?: ReactNode
     backdropClassName?: string
     className?: string
     size?: 'sm' | 'md' | 'lg' | 'xl' | 'full'
+    /**
+     * When false, hide the X control and ignore Escape / backdrop click.
+     * Use for required-choice flows (e.g. delivery mode). Default true.
+     */
+    dismissible?: boolean
 }
 
 const SIZE_CLASSES = {
@@ -38,22 +43,22 @@ export function Modal({
     backdropClassName,
     className,
     size = 'xl',
+    dismissible = true,
 }: ModalProps) {
     const [mounted, setMounted] = useState(false)
     const titleId = useId()
-
+    const canDismiss = dismissible && typeof onClose === 'function'
 
     useEffect(() => {
         setMounted(true)
     }, [])
 
-
     useEffect(() => {
         if (!open) return
 
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                onClose()
+            if (e.key === 'Escape' && canDismiss) {
+                onClose?.()
             }
         }
 
@@ -65,7 +70,7 @@ export function Modal({
             document.body.style.overflow = previousOverflow
             document.removeEventListener('keydown', handleKeyDown)
         }
-    }, [open, onClose])
+    }, [open, onClose, canDismiss])
 
     if (!mounted || !open) return null
 
@@ -77,7 +82,7 @@ export function Modal({
             {/* Backdrop */}
             <div
                 className={cn('fixed inset-0 transition-opacity', backdropClassName ?? 'bg-black/40')}
-                onClick={onClose}
+                onClick={canDismiss ? onClose : undefined}
                 aria-hidden="true"
             />
 
@@ -97,14 +102,16 @@ export function Modal({
                     <h2 id={titleId} className="text-base font-semibold text-[--color-portal-navy]">
                         {title}
                     </h2>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        aria-label="Close modal"
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full text-portal-muted hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-portal-purple transition-colors"
-                    >
-                        <MaterialIcon name="cancel" size={20} className="text-[--color-portal-purple]" />
-                    </button>
+                    {canDismiss ? (
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            aria-label="Close modal"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-portal-muted hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-portal-purple transition-colors"
+                        >
+                            <MaterialIcon name="cancel" size={20} className="text-[--color-portal-purple]" />
+                        </button>
+                    ) : null}
                 </header>
 
                 {/* Content Body */}

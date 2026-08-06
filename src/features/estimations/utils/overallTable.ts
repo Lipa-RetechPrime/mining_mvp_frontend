@@ -1,6 +1,13 @@
 import type { OverallCostItemDto, OverallEntityDto, OverallListData } from '../api/investments/types'
 import { compareEntityCodes } from '../constants/entityTabs'
 import { parsePhaseTypeCode } from '../phases/phaseTypes'
+import {
+  computeExternalAgentPayable,
+  computeFullAgentPayable,
+  distributePaybackEqually,
+  nextPaybackPhaseCodes,
+  paybackPhaseCodesFromStart,
+} from '@/features/projects/partialContribution'
 
 export type OverallRowKind =
   | 'section-header'
@@ -239,4 +246,183 @@ export function buildOverallTableRows(data: OverallListData): {
   }
 
   return { rows, phaseColumns, electrificationPercent }
+}
+
+export type PartialPaybackOverlayInput = {
+  contributionPercentage: number
+  escalationPercent: number
+  paybackPeriodYears: number
+  /** Mine life-of-mine phase cap (does not change under outsourcing). */
+  phaseLimit?: number | null
+}
+
+/**
+ * Insert an equal-split external-agent payback row after each cost item.
+ * Does not mutate ownership phase values from the API.
+ */
+export function withPartialPaybackOverlay(
+  built: ReturnType<typeof buildOverallTableRows>,
+  settings: PartialPaybackOverlayInput,
+): ReturnType<typeof buildOverallTableRows> {
+  const { rows, phaseColumns, electrificationPercent } = built
+
+  const allTargetCodes = new Set<string>()
+  const paybackAfterItem = new Map<
+    number,
+    { amount: number; phaseValues: Record<string, number>; details: string }
+  >()
+
+  rows.forEach((row, index) => {
+    if (row.kind !== 'item') return
+
+    const totalAmount =
+      row.amount != null && Number.isFinite(row.amount) ? row.amount : 0
+    let contributionA = 0
+    const filledCodes: string[] = []
+    for (const [code, value] of Object.entries(row.phaseValues)) {
+      if (value != null && Number.isFinite(value) && value !== 0) {
+        filledCodes.push(code)
+        contributionA += (value * settings.contributionPercentage) / 100
+      }
+    }
+
+    const { payableB } = computeExternalAgentPayable({
+      totalAmount,
+      contributionAmountA: contributionA,
+      escalationPercent: settings.escalationPercent,
+    })
+
+    const targets = nextPaybackPhaseCodes(
+      filledCodes,
+      settings.paybackPeriodYears,
+      settings.phaseLimit,
+    )
+    if (targets.length === 0 || !(payableB > 0)) return
+
+    for (const code of targets) allTargetCodes.add(code)
+    paybackAfterItem.set(index, {
+      amount: payableB,
+      phaseValues: distributePaybackEqually(payableB, targets),
+      details: row.details
+        ? `External agent payback — ${row.details}`
+        : 'External agent payback',
+    })
+  })
+
+  const nextColumns = sortPhaseColumns([
+    ...new Set([...phaseColumns, ...allTargetCodes]),
+  ])
+
+  const nextRows: OverallTableRow[] = []
+  rows.forEach((row, index) => {
+    const phaseValues: Record<string, number | null> = {}
+    for (const column of nextColumns) {
+      phaseValues[column] = row.phaseValues[column] ?? null
+    }
+    nextRows.push({ ...row, phaseValues })
+
+    const payback = paybackAfterItem.get(index)
+    if (!payback) return
+
+    const paybackPhaseValues: Record<string, number | null> = {}
+    for (const column of nextColumns) {
+      paybackPhaseValues[column] = payback.phaseValues[column] ?? null
+    }
+    nextRows.push({
+      kind: 'design-charge',
+      details: payback.details,
+      amount: payback.amount,
+      phaseValues: paybackPhaseValues,
+    })
+  })
+
+  return {
+    rows: nextRows,
+    phaseColumns: nextColumns,
+    electrificationPercent,
+  }
+}
+
+export type FullPaybackOverlayInput = {
+  escalationPercent: number
+  paybackPeriodYears: number
+  paybackStartPhase: string
+  phaseLimit?: number | null
+}
+
+/**
+ * Insert equal-split external-agent payback row after each cost item (Full).
+ * Payable b = total × (1 + escalation%); distributed from the chosen start phase.
+ */
+export function withFullPaybackOverlay(
+  built: ReturnType<typeof buildOverallTableRows>,
+  settings: FullPaybackOverlayInput,
+): ReturnType<typeof buildOverallTableRows> {
+  const { rows, phaseColumns, electrificationPercent } = built
+
+  const allTargetCodes = new Set<string>()
+  const paybackAfterItem = new Map<
+    number,
+    { amount: number; phaseValues: Record<string, number>; details: string }
+  >()
+
+  rows.forEach((row, index) => {
+    if (row.kind !== 'item') return
+
+    const totalAmount =
+      row.amount != null && Number.isFinite(row.amount) ? row.amount : 0
+    const payableB = computeFullAgentPayable({
+      totalAmount,
+      escalationPercent: settings.escalationPercent,
+    })
+
+    const targets = paybackPhaseCodesFromStart(
+      settings.paybackStartPhase,
+      settings.paybackPeriodYears,
+      settings.phaseLimit,
+    )
+    if (targets.length === 0 || !(payableB > 0)) return
+
+    for (const code of targets) allTargetCodes.add(code)
+    paybackAfterItem.set(index, {
+      amount: payableB,
+      phaseValues: distributePaybackEqually(payableB, targets),
+      details: row.details
+        ? `External agent payback — ${row.details}`
+        : 'External agent payback',
+    })
+  })
+
+  const nextColumns = sortPhaseColumns([
+    ...new Set([...phaseColumns, ...allTargetCodes]),
+  ])
+
+  const nextRows: OverallTableRow[] = []
+  rows.forEach((row, index) => {
+    const phaseValues: Record<string, number | null> = {}
+    for (const column of nextColumns) {
+      phaseValues[column] = row.phaseValues[column] ?? null
+    }
+    nextRows.push({ ...row, phaseValues })
+
+    const payback = paybackAfterItem.get(index)
+    if (!payback) return
+
+    const paybackPhaseValues: Record<string, number | null> = {}
+    for (const column of nextColumns) {
+      paybackPhaseValues[column] = payback.phaseValues[column] ?? null
+    }
+    nextRows.push({
+      kind: 'design-charge',
+      details: payback.details,
+      amount: payback.amount,
+      phaseValues: paybackPhaseValues,
+    })
+  })
+
+  return {
+    rows: nextRows,
+    phaseColumns: nextColumns,
+    electrificationPercent,
+  }
 }

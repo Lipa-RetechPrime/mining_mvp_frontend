@@ -3,7 +3,7 @@ import { Input } from '@/shared/components/ui/Input'
 
 /**
  * Per-entity design/electrification surcharge percent.
- * One value per entity — set once, prefilled for later cost items; user can change it.
+ * Value is user-entered — do not invent defaults. Show a saved % only when editing that entity.
  */
 export function ElectrificationPercentInput({
   value,
@@ -62,8 +62,9 @@ export function ElectrificationPercentInput({
         onBlur={() => commitDraft(draft)}
       />
       <p className="mt-1.5 text-xs text-[--text-color]">
-        Required for {entityLabel}. Applies to all cost items for this entity;
-        change it anytime and it updates for the whole entity.
+        Enter a percent for {entityLabel} when needed. Leave blank on new items
+        to keep an already-saved entity value; typing a new value updates the
+        whole entity.
       </p>
     </div>
   )

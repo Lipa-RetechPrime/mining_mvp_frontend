@@ -11,6 +11,7 @@ import { getEntities } from '../master'
 import { generateUuid } from '../../utils/uuid'
 import {
   applyMinePhaseLimitToBlocks,
+  asUuidOrNull,
   cleanUuid,
   isStepPopulated,
   isUuid,
@@ -219,6 +220,8 @@ function mapCostItemToStep(costItem: InvestmentCostItemDto): Step {
     // Prefer mine limit when known; otherwise keep at least current phase count for edit UX.
     phaseLimit: Math.max(phases.length, DEFAULT_INITIAL_PHASE_COUNT),
     phasePageIndex: 0,
+    functionInvestmentTypeId: costItem.function_investment_type_id ?? null,
+    functionMasterId: costItem.function_master_id ?? null,
   }
 }
 
@@ -252,8 +255,14 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
 
   const block = estimation.blocks[0]
   const function_name = block?.sectorName?.trim() || 'Residential buildings'
+  // Prefer sectorId (nav ?sector= / function_master_id). Never invent a random UUID.
   const function_master_id =
-    block && isUuid(block.id) ? cleanUuid(block.id) : generateUuid()
+    asUuidOrNull(block?.sectorId) || asUuidOrNull(block?.id)
+  if (!function_master_id) {
+    throw new Error(
+      'Select a cost function with a valid function_master_id before submitting.',
+    )
+  }
 
   const orderedTabs = [...(block?.entityTabs || [])].sort((a, b) =>
     compareEntityCodes(a.entityCode, b.entityCode),
@@ -303,6 +312,8 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
             }
           }),
         }
+        // Nest create/update DTOs forbid FIT/function fields on cost items —
+        // isolation uses top-level function_investment_type_id + item ids.
         return mode === 'update' ? { id: cleanUuid(step.id), ...base } : base
       }),
     }
@@ -313,6 +324,9 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
       mine_name,
       function_master_id,
       function_name,
+      ...(estimation.functionInvestmentTypeId
+        ? { function_investment_type_id: estimation.functionInvestmentTypeId }
+        : {}),
       entities,
     }
   }
@@ -322,6 +336,9 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
     mine_name,
     function_master_id,
     function_name,
+    ...(estimation.functionInvestmentTypeId
+      ? { function_investment_type_id: estimation.functionInvestmentTypeId }
+      : {}),
     entities,
   }
 }
@@ -331,25 +348,63 @@ export function mapDtoToEstimation(dto: InvestmentDto): Estimation {
   const orderedEntities = [...dto.entities].sort((a, b) =>
     compareEntityCodes(a.entity_name, b.entity_name),
   )
-  const entityTabs = orderedEntities.map((entity) => {
-    const steps = entity.costItems.map(mapCostItemToStep)
-    return {
-      entityId: entity.entity_id || entityIdFromName(entity.entity_name),
-      entityCode: entity.entity_name,
-      steps,
-      currentStepIndex: Math.max(0, steps.length - 1),
-    }
-  })
 
-  const blocks = [
-    {
-      id: dto.function_master_id || generateUuid(),
-      sectorId: entityIdFromName(dto.function_name || 'Residential buildings'),
-      sectorName: dto.function_name?.trim() || 'Residential buildings',
+  const functionIds = new Set<string>()
+  for (const entity of orderedEntities) {
+    for (const item of entity.costItems ?? []) {
+      const fnId =
+        item.function_master_id?.trim() || dto.function_master_id?.trim() || ''
+      if (fnId) functionIds.add(fnId)
+    }
+  }
+  if (functionIds.size === 0 && dto.function_master_id?.trim()) {
+    functionIds.add(dto.function_master_id.trim())
+  }
+  if (functionIds.size === 0) {
+    functionIds.add(
+      entityIdFromName(dto.function_name || 'Residential buildings'),
+    )
+  }
+
+  const blocks = [...functionIds].map((functionId) => {
+    const entityTabs = orderedEntities.map((entity) => {
+      const steps = (entity.costItems ?? [])
+        .filter((item) => {
+          const itemFn =
+            item.function_master_id?.trim() || dto.function_master_id?.trim() || ''
+          // Legacy rows without function_master_id stay on the sheet function.
+          if (!item.function_master_id?.trim()) {
+            return functionId === (dto.function_master_id?.trim() || functionId)
+          }
+          return itemFn === functionId
+        })
+        .map((item) =>
+          mapCostItemToStep({
+            ...item,
+            function_master_id: item.function_master_id || functionId,
+          }),
+        )
+      return {
+        entityId: entity.entity_id || entityIdFromName(entity.entity_name),
+        entityCode: entity.entity_name,
+        steps,
+        currentStepIndex: Math.max(0, steps.length - 1),
+      }
+    })
+
+    return {
+      id: `blk-${functionId}`,
+      sectorId: functionId,
+      // Only the DTO's primary function has a reliable name. Other function
+      // blocks must not inherit that name (e.g. Hauling → Blasting).
+      sectorName:
+        functionId === dto.function_master_id?.trim()
+          ? dto.function_name?.trim() || 'Cost function'
+          : 'Cost function',
       activeEntityId: entityTabs[0]?.entityId ?? '',
       entityTabs,
-    },
-  ]
+    }
+  })
 
   const phaseLimitFromApi = resolveMinePhaseLimit(dto)
   const phaseLimit = phaseLimitFromApi ?? inferPhaseLimitFromSteps(blocks)
@@ -378,6 +433,211 @@ export function mapDtoToEstimation(dto: InvestmentDto): Estimation {
     createdAt: dto.created_at ?? undefined,
     updatedAt: dto.updated_at ?? undefined,
   }
+}
+
+/**
+ * Keep peer FIT cost items on update. The editor is scoped to one OW/PO/FO/AH id;
+ * without merging, a full-replace PUT would delete the other types' items.
+ */
+export function mergePreservedFitSteps(
+  editor: Estimation,
+  latest: Estimation | null | undefined,
+): Estimation {
+  const activeFit = editor.functionInvestmentTypeId?.trim() || null
+  const activeFunction = editor.blocks[0]?.sectorId?.trim() || null
+  if (!latest || !activeFit) return editor
+
+  const preservedByEntity = new Map<string, Step[]>()
+
+  for (const block of latest.blocks) {
+    const blockFn = block.sectorId?.trim() || null
+    for (const tab of block.entityTabs) {
+      const keep = tab.steps.filter((step) => {
+        if (!isStepPopulated(step)) return false
+        const stepFn = step.functionMasterId?.trim() || blockFn
+        const stepFit = step.functionInvestmentTypeId?.trim() || null
+        // Same function only — DTO is single-function; other FIT rows for this
+        // function must ride along so the backend does not delete them.
+        if (activeFunction && stepFn && stepFn !== activeFunction) return false
+        if (stepFit === activeFit) return false
+        return true
+      })
+      if (keep.length === 0) continue
+      const key = tab.entityCode.trim().toLowerCase()
+      preservedByEntity.set(key, [
+        ...(preservedByEntity.get(key) ?? []),
+        ...keep,
+      ])
+    }
+  }
+
+  if (preservedByEntity.size === 0) return editor
+
+  return {
+    ...editor,
+    blocks: editor.blocks.map((block) => ({
+      ...block,
+      entityTabs: block.entityTabs.map((tab) => {
+        const preserved =
+          preservedByEntity.get(tab.entityCode.trim().toLowerCase()) ?? []
+        if (preserved.length === 0) return tab
+        const existingIds = new Set(tab.steps.map((step) => step.id))
+        const toAdd = preserved.filter((step) => !existingIds.has(step.id))
+        if (toAdd.length === 0) return tab
+        return {
+          ...tab,
+          steps: [...tab.steps, ...toAdd],
+        }
+      }),
+    })),
+  }
+}
+
+/**
+ * Keep only cost items for the active FIT + function.
+ * Ownership / Partial / Full store separate phase rows — never mix them.
+ */
+export function scopeEstimationToInvestmentType(
+  estimation: Estimation,
+  functionInvestmentTypeId: string | null | undefined,
+  functionMasterId?: string | null,
+  options?: {
+    includeLegacyNullFit?: boolean
+    /** Authoritative display name for this function (from mine-wise nav). */
+    functionName?: string | null
+  },
+): Estimation {
+  const fitId = functionInvestmentTypeId?.trim() || null
+  const functionId = functionMasterId?.trim() || null
+  const includeLegacy = Boolean(options?.includeLegacyNullFit)
+  const functionName = options?.functionName?.trim() || ''
+
+  const sourceBlocks =
+    functionId && estimation.blocks.some((b) => b.sectorId === functionId)
+      ? estimation.blocks.filter((b) => b.sectorId === functionId).map((block) =>
+          functionName && block.sectorName !== functionName
+            ? { ...block, sectorName: functionName }
+            : block,
+        )
+      : functionId
+        ? [
+            {
+              id: `blk-${functionId}`,
+              sectorId: functionId,
+              sectorName:
+                functionName ||
+                estimation.blocks.find((b) => b.sectorId === functionId)
+                  ?.sectorName ||
+                'Cost function',
+              activeEntityId: estimation.blocks[0]?.activeEntityId ?? '',
+              entityTabs: mergeEntityTabsForFunction(estimation, functionId),
+            },
+          ]
+        : estimation.blocks
+
+  const scopedBlocks = sourceBlocks.map((block) => ({
+    ...block,
+    entityTabs: block.entityTabs.map((tab) => {
+      let steps = tab.steps
+      if (functionId) {
+        steps = steps.filter((step) => {
+          const stepFn = step.functionMasterId?.trim() || null
+          if (stepFn) return stepFn === functionId
+          // Legacy rows without function_master_id belong only to the block
+          // they were loaded under — never bleed into another cost function.
+          return block.sectorId === functionId
+        })
+      }
+      if (fitId) {
+        steps = steps.filter((step) => {
+          const stepFit = step.functionInvestmentTypeId?.trim() || null
+          if (stepFit === fitId) return true
+          // Pre-FIT rows: show under Ownership only when requested.
+          if (includeLegacy && stepFit == null) return true
+          return false
+        })
+      } else {
+        steps = []
+      }
+      return {
+        ...tab,
+        steps,
+        currentStepIndex: Math.max(0, steps.length - 1),
+      }
+    }),
+  }))
+
+  const hasPopulatedForFunction = scopedBlocks.some((block) =>
+    block.entityTabs.some((tab) => tab.steps.some(isStepPopulated)),
+  )
+
+  return {
+    ...estimation,
+    functionInvestmentTypeId: fitId,
+    // New / empty functions must not inherit another function's entity %.
+    electrificationPercentByEntity: hasPopulatedForFunction
+      ? estimation.electrificationPercentByEntity
+      : {},
+    percentageMasterIdByEntity: hasPopulatedForFunction
+      ? estimation.percentageMasterIdByEntity
+      : {},
+    blocks: scopedBlocks,
+  }
+}
+
+/** Gather entity tabs/steps for a function when list data was under another block. */
+function mergeEntityTabsForFunction(
+  estimation: Estimation,
+  functionId: string,
+): Estimation['blocks'][number]['entityTabs'] {
+  const byEntity = new Map<
+    string,
+    Estimation['blocks'][number]['entityTabs'][number]
+  >()
+
+  for (const block of estimation.blocks) {
+    for (const tab of block.entityTabs) {
+      const matchingSteps = tab.steps.filter((step) => {
+        const stepFn = step.functionMasterId?.trim() || null
+        if (stepFn) return stepFn === functionId
+        // Legacy rows stay with the block they were mapped under.
+        return block.sectorId === functionId
+      })
+      if (matchingSteps.length === 0 && block.sectorId !== functionId) {
+        continue
+      }
+      const existing = byEntity.get(tab.entityId)
+      if (!existing) {
+        byEntity.set(tab.entityId, {
+          entityId: tab.entityId,
+          entityCode: tab.entityCode,
+          steps: [...matchingSteps],
+          currentStepIndex: Math.max(0, matchingSteps.length - 1),
+        })
+        continue
+      }
+      const steps = [...existing.steps, ...matchingSteps]
+      byEntity.set(tab.entityId, {
+        ...existing,
+        steps,
+        currentStepIndex: Math.max(0, steps.length - 1),
+      })
+    }
+  }
+
+  if (byEntity.size === 0) {
+    return (
+      estimation.blocks[0]?.entityTabs.map((tab) => ({
+        ...tab,
+        steps: [],
+        currentStepIndex: 0,
+      })) ?? []
+    )
+  }
+
+  return [...byEntity.values()].sort((a, b) =>
+    compareEntityCodes(a.entityCode, b.entityCode),
+  )
 }
 
 /**

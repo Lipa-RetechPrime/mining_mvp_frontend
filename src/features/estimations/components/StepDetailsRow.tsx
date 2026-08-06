@@ -263,7 +263,7 @@ export function StepDetailsRow({
               <span className="text-xs font-medium leading-none text-[#6B7280]">
                 {labels.label3 || DEFAULT_LABELS.label3}
               </span>
-              <ModePills
+              {/* <ModePills
                 key={`unit-cost-mode-${step.id}-${unitCostMode}`}
                 name={`unit-cost-mode-${step.id}`}
                 legend="Unit cost mode"
@@ -273,7 +273,7 @@ export function StepDetailsRow({
                   { value: 'on_hire', label: 'On hire' },
                   { value: 'manual', label: 'Manual' },
                 ]}
-              />
+              /> */}
             </div>
             <Input
               type="text"

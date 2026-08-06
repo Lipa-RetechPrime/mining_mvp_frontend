@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Button } from '@/shared/components/ui/Button'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
@@ -13,7 +14,9 @@ import {
   fetchOverallList,
   isStepPopulated,
   removeCostItemFromEstimation,
+  scopeEstimationToInvestmentType,
 } from '../api/investments'
+import { asUuidOrNull } from '../api/investments/domain'
 import type { OverallListData } from '../api/investments/types'
 import type { Estimation, Phase, PhaseTypeMaster, Step } from '../types/estimation'
 import { formatAmount } from '../utils/formatAmount'
@@ -114,18 +117,18 @@ function EntityCostTable({
     <div className="overflow-x-auto rounded-lg border border-portal-border">
       <table className="w-full min-w-[720px] border-collapse text-left text-sm">
         <thead>
-          <tr className="border-b border-portal-border bg-gray-50/80 text-2xs font-semibold uppercase tracking-wide text-gray-400">
-            <th className="px-4 border border-portal-border py-3 sm:px-5">Cost Item</th>
-            <th className="px-3 border border-portal-border py-3 text-right">Manpower</th>
-            <th className="px-3 border border-portal-border py-3 text-right">Qrts</th>
-            <th className="px-3 border border-portal-border py-3 text-right">Unit Cost</th>
-            <th className="px-3 border border-portal-border py-3 text-right">Amount</th>
+          <tr className="border-b border-portal-border bg-gray-50/80 text-2xs font-semibold uppercase tracking-wide text-[--text-color]">
+            <th className="px-4 border border-portal-border py-3 sm:px-5 text-xs">Cost Item</th>
+            <th className="px-3 border border-portal-border py-3 text-right text-xs">Manpower</th>
+            <th className="px-3 border border-portal-border py-3 text-right text-xs">Qrts</th>
+            <th className="px-3 border border-portal-border py-3 text-right text-xs">Unit Cost</th>
+            <th className="px-3 border border-portal-border py-3 text-right text-xs">Amount</th>
             {phaseColumns.map((phaseType) => (
-              <th key={phaseType} className="px-3 border border-portal-border py-3 text-right">
+              <th key={phaseType} className="px-3 border border-portal-border py-3 text-right text-xs">
                 {phaseType}
               </th>
             ))}
-            <th className="px-4 border border-portal-border py-3 text-right sm:px-5">Actions</th>
+            <th className="px-4 border border-portal-border py-3 text-right sm:px-5 text-xs">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -145,9 +148,9 @@ function EntityCostTable({
                 <td className="px-3 border border-portal-border py-3 text-right tabular-nums text-gray-700">
                   <div className="flex flex-col items-end gap-0.5">
                     <span>{formatNum(step.unitCost)}</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                    {/* <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
                       {step.unitCostMode === 'on_hire' ? 'On hire' : 'Manual'}
-                    </span>
+                    </span> */}
                   </div>
                 </td>
                 <td className="px-3 border border-portal-border py-3 text-right tabular-nums font-medium text-[--color-portal-navy]">
@@ -190,6 +193,10 @@ function EntityCostTable({
 
 function EstimationTableCard({  estimation,
   phaseTypes,
+  functionMasterId: functionMasterIdProp,
+  functionName,
+  functionInvestmentTypeId,
+  includeLegacyNullFit,
   onEdit,
   onDelete,
   onChanged,
@@ -197,12 +204,40 @@ function EstimationTableCard({  estimation,
 }: {
   estimation: Estimation
   phaseTypes: PhaseTypeMaster[]
+  functionMasterId?: string | null
+  functionName?: string | null
+  functionInvestmentTypeId?: string | null
+  includeLegacyNullFit?: boolean
   onEdit: (estimationId: string, entityId: string) => void
   onDelete: (estimationId: string) => void | Promise<void>
   onChanged: () => void | Promise<void>
   onItemUpdated: (estimation: Estimation) => void
 }) {
-  const block = estimation.blocks[0]
+  const searchParams = useSearchParams()
+  const functionMasterId =
+    asUuidOrNull(functionMasterIdProp) ||
+    asUuidOrNull(searchParams.get('sector')) ||
+    asUuidOrNull(estimation.blocks[0]?.sectorId) ||
+    asUuidOrNull(estimation.blocks[0]?.id) ||
+    ''
+
+  const scopedEstimation = functionMasterId
+    ? scopeEstimationToInvestmentType(
+        estimation,
+        functionInvestmentTypeId,
+        functionMasterId,
+        {
+          includeLegacyNullFit,
+          functionName,
+        },
+      )
+    : estimation
+
+  const block =
+    scopedEstimation.blocks.find((candidate) => candidate.sectorId === functionMasterId) ??
+    scopedEstimation.blocks[0]
+  const displaySectorName =
+    functionName?.trim() || block?.sectorName || 'Cost function'
   const tabs = block?.entityTabs ?? []
   const [activeEntityId, setActiveEntityId] = useState(() => OVERALL_TAB_ID)
   const [addingCostItems, setAddingCostItems] = useState(false)
@@ -224,14 +259,21 @@ function EstimationTableCard({  estimation,
   ]
 
   const loadOverall = useCallback(async () => {
-    if (!estimation.mine_id) {
+    if (!estimation.mine_id || !functionMasterId) {
       setOverallData(null)
+      if (!functionMasterId) {
+        setOverallError('Select a cost function to load the overall summary.')
+      }
       return
     }
     setOverallLoading(true)
     setOverallError(null)
     try {
-      const data = await fetchOverallList(estimation.mine_id)
+      const data = await fetchOverallList(
+        estimation.mine_id,
+        functionMasterId,
+        functionInvestmentTypeId ?? scopedEstimation.functionInvestmentTypeId,
+      )
       setOverallData(data)
     } catch (error) {
       setOverallData(null)
@@ -241,19 +283,28 @@ function EstimationTableCard({  estimation,
     } finally {
       setOverallLoading(false)
     }
-  }, [estimation.mine_id])
+  }, [
+    estimation.mine_id,
+    functionInvestmentTypeId,
+    scopedEstimation.functionInvestmentTypeId,
+    functionMasterId,
+  ])
 
-  // Fetch overall when the Overall tab is active (mine change while on it included).
+  // Fetch overall when the Overall tab is active (mine/function change while on it included).
   useEffect(() => {
     if (!isOverallTab) return
     let cancelled = false
 
     async function run() {
-      if (!estimation.mine_id) {
+      if (!estimation.mine_id || !functionMasterId) {
         if (!cancelled) {
           setOverallData(null)
           setOverallLoading(false)
-          setOverallError(null)
+          setOverallError(
+            functionMasterId
+              ? null
+              : 'Select a cost function to load the overall summary.',
+          )
         }
         return
       }
@@ -262,7 +313,11 @@ function EstimationTableCard({  estimation,
         setOverallError(null)
       }
       try {
-        const data = await fetchOverallList(estimation.mine_id)
+        const data = await fetchOverallList(
+          estimation.mine_id,
+          functionMasterId,
+          functionInvestmentTypeId ?? scopedEstimation.functionInvestmentTypeId,
+        )
         if (!cancelled) setOverallData(data)
       } catch (error) {
         if (!cancelled) {
@@ -280,7 +335,13 @@ function EstimationTableCard({  estimation,
     return () => {
       cancelled = true
     }
-  }, [isOverallTab, estimation.mine_id])
+  }, [
+    isOverallTab,
+    estimation.mine_id,
+    functionInvestmentTypeId,
+    scopedEstimation.functionInvestmentTypeId,
+    functionMasterId,
+  ])
 
   if (!block || !estimation.id) return null
 
@@ -363,7 +424,7 @@ function EstimationTableCard({  estimation,
           message: (
             <>
               Are you sure you want to delete this entire estimation for{' '}
-              <span className="font-semibold text-[--color-portal-navy]">{block.sectorName}</span>? This
+              <span className="font-semibold text-[--color-portal-navy]">{displaySectorName}</span>? This
               cannot be undone.
             </>
           ),
@@ -384,7 +445,7 @@ function EstimationTableCard({  estimation,
   return (
     <article className="mb-5 rounded-card bg-white px-6 py-7 sm:px-8 sm:py-8">
       <EstimationBlockHeader
-        sectorName={block.sectorName}
+        sectorName={displaySectorName}
         appendixLabel={estimation.appendixLabel}
         siteSubtitle={estimation.siteSubtitle}
       />
@@ -471,7 +532,10 @@ function EstimationTableCard({  estimation,
             {overallError}
           </p>
         ) : overallData ? (
-          <OverallCostTable data={overallData} />
+          <OverallCostTable
+            data={overallData}
+            phaseLimit={estimation.phaseLimit}
+          />
         ) : (
           <div className="rounded-lg border border-dashed border-portal-border px-6 py-10 text-center text-sm text-gray-500">
             No overall data available for this estimation.
@@ -508,7 +572,7 @@ function EstimationTableCard({  estimation,
                 entityCode={activeTab.entityCode}
                 minePhaseLimit={estimation.phaseLimit}
                 electrificationPercent={
-                  estimation.electrificationPercentByEntity?.[activeTab.entityId]
+                  scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
                 }
                 submitLabel="Submit"
                 onSubmit={handleSaveSteps}
@@ -524,9 +588,9 @@ function EstimationTableCard({  estimation,
           blockId={block.id}
           entityId={activeTab.entityId}
           entityCode={activeTab.entityCode}
-          minePhaseLimit={estimation.phaseLimit}
+          minePhaseLimit={scopedEstimation.phaseLimit}
           electrificationPercent={
-            estimation.electrificationPercentByEntity?.[activeTab.entityId]
+            scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
           }
           submitLabel="Submit"
           onSubmit={handleSaveSteps}
@@ -554,6 +618,10 @@ function EstimationTableCard({  estimation,
 export function CostItemsTable({
   items,
   phaseTypes,
+  functionMasterId,
+  functionName,
+  functionInvestmentTypeId,
+  includeLegacyNullFit,
   onEdit,
   onDelete,
   onChanged,
@@ -561,6 +629,10 @@ export function CostItemsTable({
 }: {
   items: Estimation[]
   phaseTypes: PhaseTypeMaster[]
+  functionMasterId?: string | null
+  functionName?: string | null
+  functionInvestmentTypeId?: string | null
+  includeLegacyNullFit?: boolean
   onEdit: (estimationId: string, entityId: string) => void
   onDelete: (estimationId: string) => void | Promise<void>
   onChanged: () => void | Promise<void>
@@ -585,6 +657,10 @@ export function CostItemsTable({
           key={estimation.id}
           estimation={estimation}
           phaseTypes={phaseTypes}
+          functionMasterId={functionMasterId}
+          functionName={functionName}
+          functionInvestmentTypeId={functionInvestmentTypeId}
+          includeLegacyNullFit={includeLegacyNullFit}
           onEdit={onEdit}
           onDelete={onDelete}
           onChanged={onChanged}

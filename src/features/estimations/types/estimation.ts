@@ -41,6 +41,10 @@ export interface Step {
    */
   phaseLimit?: number | null
   phasePageIndex: number
+  /** FIT this cost item was saved under (for ownership vs outsourcing isolation). */
+  functionInvestmentTypeId?: string | null
+  /** Cost function this step belongs to (from CostItem.function_master_id). */
+  functionMasterId?: string | null
 }
 
 export interface EntityTabState {
@@ -66,6 +70,11 @@ export interface Estimation {
   appendixLabel: string
   /** Plain-text life of mine from the mine record (listing display). */
   lifeOfMine?: string | null
+  /**
+   * Active FunctionInvestmentType (OW / PO / FO). Cost items and phases are
+   * scoped to this id so ownership and outsourcing do not share phase data.
+   */
+  functionInvestmentTypeId?: string | null
   /**
    * Max phases allowed per cost item for this mine.
    * Persisted via create-mine-year (`year` = phase limit).
@@ -115,4 +124,5 @@ export interface EstimationWorkspaceState {
   statusMessage: string
   entitiesBySector: Record<string, EntityMaster[]>
   phaseTypes: PhaseTypeMaster[]
+  dirty: boolean
 }

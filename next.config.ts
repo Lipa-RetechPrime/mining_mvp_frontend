@@ -17,6 +17,7 @@ const nextConfig: NextConfig = {
           destination: `${backendOrigin}/api/:path*`,
         },
       ],
+      // output: ['export'],
     };
   },
 };
