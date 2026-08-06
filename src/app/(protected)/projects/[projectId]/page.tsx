@@ -440,6 +440,15 @@ function ProjectDetailsContent() {
   const noFunctionsForMine =
     !mineFunctionsLoading && mineFunctions.length === 0 && Boolean(activeMineId)
 
+  const functionOptions = useMemo(
+    () =>
+      mineFunctions.map((fn) => ({
+        id: fn.function_master_id,
+        name: fn.function_name,
+      })),
+    [mineFunctions],
+  )
+
   return (
     <div className="min-w-0 space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -530,6 +539,8 @@ function ProjectDetailsContent() {
             projectId={activeMineId}
             projectName={selectedMine?.mine_name || activeMineId}
             phaseTypes={phaseTypes}
+            functionOptions={functionOptions}
+            initialSettings={outsourcingPartial}
             onChangeMode={handleChangeMode}
             onContinueToEstimation={(kind, settings) => {
               setPreferredOutsourcingKind(functionMasterId, kind)

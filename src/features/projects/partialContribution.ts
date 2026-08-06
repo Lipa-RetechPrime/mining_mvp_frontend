@@ -139,3 +139,33 @@ export function paybackPhaseCodesFromStart(
   }
   return targets
 }
+
+/**
+ * Full-contribution cost-item display phases:
+ * Amount spread equally across N phases from start, then each share × (1 + E%).
+ * Same codes/values as Overall external-agent payback for that item.
+ */
+export function buildFullCostItemPaybackPhases(params: {
+  totalAmount: number | null | undefined
+  escalationPercent: number
+  paybackPeriodYears: number
+  paybackStartPhase: string
+  phaseLimit?: number | null
+}): Array<{ phaseType: string; value: number }> {
+  const targets = paybackPhaseCodesFromStart(
+    params.paybackStartPhase,
+    params.paybackPeriodYears,
+    params.phaseLimit,
+  )
+  if (targets.length === 0) return []
+
+  const payableB = computeFullAgentPayable({
+    totalAmount: params.totalAmount ?? 0,
+    escalationPercent: params.escalationPercent,
+  })
+  const distributed = distributePaybackEqually(payableB, targets)
+  return targets.map((phaseType) => ({
+    phaseType,
+    value: distributed[phaseType] ?? 0,
+  }))
+}

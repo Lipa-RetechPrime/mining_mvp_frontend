@@ -24,32 +24,66 @@ type FitApiResponse = {
   data?: FunctionInvestmentTypeRecord | null
 }
 
+function readNumericField(
+  data: Record<string, unknown>,
+  snake: string,
+  camel: string,
+): number | null {
+  const raw = data[snake] ?? data[camel]
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+function readStringField(
+  data: Record<string, unknown>,
+  snake: string,
+  camel: string,
+): string | null {
+  const raw = data[snake] ?? data[camel]
+  if (raw == null) return null
+  const s = String(raw).trim()
+  return s || null
+}
+
 function parseFit(
   data: FitApiResponse['data'],
 ): FunctionInvestmentTypeRecord | null {
   if (!data || typeof data !== 'object') return null
-  const id = data.function_investment_type_id?.trim()
-  const functionId = data.function_master_id?.trim()
+  const row = data as Record<string, unknown>
+  const id = readStringField(
+    row,
+    'function_investment_type_id',
+    'functionInvestmentTypeId',
+  )
+  const functionId = readStringField(
+    row,
+    'function_master_id',
+    'functionMasterId',
+  )
   if (!id || !functionId) return null
   return {
     function_investment_type_id: id,
     function_master_id: functionId,
-    investment_type_id: String(data.investment_type_id ?? ''),
-    payback_period:
-      data.payback_period != null && Number.isFinite(Number(data.payback_period))
-        ? Number(data.payback_period)
-        : null,
-    from_payback_start: data.from_payback_start ?? null,
-    contribution_percentage:
-      data.contribution_percentage != null &&
-      Number.isFinite(Number(data.contribution_percentage))
-        ? Number(data.contribution_percentage)
-        : null,
-    escalation_percentage:
-      data.escalation_percentage != null &&
-      Number.isFinite(Number(data.escalation_percentage))
-        ? Number(data.escalation_percentage)
-        : null,
+    investment_type_id: String(
+      row.investment_type_id ?? row.investmentTypeId ?? '',
+    ),
+    payback_period: readNumericField(row, 'payback_period', 'paybackPeriod'),
+    from_payback_start: readStringField(
+      row,
+      'from_payback_start',
+      'fromPaybackStart',
+    ),
+    contribution_percentage: readNumericField(
+      row,
+      'contribution_percentage',
+      'contributionPercentage',
+    ),
+    escalation_percentage: readNumericField(
+      row,
+      'escalation_percentage',
+      'escalationPercentage',
+    ),
   }
 }
 
@@ -145,6 +179,24 @@ export async function upsertPartialOutsourcingConfig(
   return parsed
 }
 
+/** Soft map — prefills whatever the API returned (nulls stay null). */
+export function softPartialFieldsFromFit(
+  record: FunctionInvestmentTypeRecord | null | undefined,
+): {
+  paybackPeriodYears: number | null
+  contributionPercentage: number | null
+  escalationPercent: number | null
+  functionInvestmentTypeId: string
+} | null {
+  if (!record) return null
+  return {
+    paybackPeriodYears: record.payback_period,
+    contributionPercentage: record.contribution_percentage,
+    escalationPercent: record.escalation_percentage,
+    functionInvestmentTypeId: record.function_investment_type_id,
+  }
+}
+
 export function fitToPartialSettings(
   record: FunctionInvestmentTypeRecord | null | undefined,
 ): {
@@ -153,10 +205,10 @@ export function fitToPartialSettings(
   paybackPeriodYears: number
   functionInvestmentTypeId: string
 } | null {
-  if (!record) return null
-  const payback = record.payback_period
-  const contribution = record.contribution_percentage
-  const escalation = record.escalation_percentage
+  const soft = softPartialFieldsFromFit(record)
+  if (!soft) return null
+  const { paybackPeriodYears: payback, contributionPercentage: contribution, escalationPercent: escalation } =
+    soft
   if (
     payback == null ||
     !Number.isFinite(payback) ||
@@ -174,7 +226,7 @@ export function fitToPartialSettings(
     contributionPercentage: contribution,
     escalationPercent: escalation,
     paybackPeriodYears: payback,
-    functionInvestmentTypeId: record.function_investment_type_id,
+    functionInvestmentTypeId: soft.functionInvestmentTypeId,
   }
 }
 
@@ -249,6 +301,25 @@ export async function upsertFullOutsourcingConfig(
   return parsed
 }
 
+/** Soft map — prefills whatever the API returned (nulls stay null). */
+export function softFullFieldsFromFit(
+  record: FunctionInvestmentTypeRecord | null | undefined,
+): {
+  escalationPercent: number | null
+  paybackPeriodYears: number | null
+  paybackStartPhase: string | null
+  functionInvestmentTypeId: string
+} | null {
+  if (!record) return null
+  const start = record.from_payback_start?.trim() || null
+  return {
+    escalationPercent: record.escalation_percentage,
+    paybackPeriodYears: record.payback_period,
+    paybackStartPhase: start,
+    functionInvestmentTypeId: record.function_investment_type_id,
+  }
+}
+
 export function fitToFullSettings(
   record: FunctionInvestmentTypeRecord | null | undefined,
 ): {
@@ -257,10 +328,10 @@ export function fitToFullSettings(
   paybackStartPhase: string
   functionInvestmentTypeId: string
 } | null {
-  if (!record) return null
-  const payback = record.payback_period
-  const escalation = record.escalation_percentage
-  const start = record.from_payback_start?.trim() ?? ''
+  const soft = softFullFieldsFromFit(record)
+  if (!soft) return null
+  const { paybackPeriodYears: payback, escalationPercent: escalation, paybackStartPhase: start } =
+    soft
   if (
     payback == null ||
     !Number.isFinite(payback) ||
@@ -276,7 +347,7 @@ export function fitToFullSettings(
     escalationPercent: escalation,
     paybackPeriodYears: payback,
     paybackStartPhase: start,
-    functionInvestmentTypeId: record.function_investment_type_id,
+    functionInvestmentTypeId: soft.functionInvestmentTypeId,
   }
 }
 
@@ -314,6 +385,7 @@ import {
 /**
  * Resolve Ownership vs Outsourcing from preference + FunctionInvestmentType rows.
  * Preference lets the user keep both datasets and switch freely.
+ * Outsourcing may be preferred before any PO/FO/AH row exists (create runs on config save).
  */
 export async function resolveDeliveryModeFromApi(
   functionMasterId: string,
@@ -329,11 +401,12 @@ export async function resolveDeliveryModeFromApi(
   ])
 
   const preferred = getPreferredDeliveryMode(id)
+  // Honor explicit preference even when outsourcing FIT rows do not exist yet.
+  if (preferred === 'outsourcing') return 'outsourcing'
   if (preferred === 'ownership' && ownership) return 'ownership'
-  if (preferred === 'outsourcing' && (partial || full || adhoc)) {
-    return 'outsourcing'
+  if (preferred === 'ownership' && !partial && !full && !adhoc) {
+    return ownership ? 'ownership' : null
   }
-  if (preferred === 'outsourcing' && !ownership) return 'outsourcing'
 
   if (fitToPartialSettings(partial) || fitToFullSettings(full) || adhoc) {
     return 'outsourcing'
@@ -343,7 +416,12 @@ export async function resolveDeliveryModeFromApi(
   return null
 }
 
-/** Persist delivery mode choice as OW or PO FunctionInvestmentType stub. */
+/**
+ * Persist delivery mode choice.
+ * Ownership → creates OW via investment-type/create immediately.
+ * Outsourcing → stores preference only; create runs when the user saves
+ * Partial/Full/Adhoc config details.
+ */
 export async function persistDeliveryModeChoice(
   functionMasterId: string,
   mode: 'ownership' | 'outsourcing',
@@ -351,9 +429,7 @@ export async function persistDeliveryModeChoice(
   setPreferredDeliveryMode(functionMasterId, mode)
   if (mode === 'ownership') {
     await createInvestmentTypeStub(functionMasterId, 'OW')
-    return
   }
-  await createInvestmentTypeStub(functionMasterId, 'PO')
 }
 
 /** Ensure an AH stub exists for Adhoc cost-item isolation. */
