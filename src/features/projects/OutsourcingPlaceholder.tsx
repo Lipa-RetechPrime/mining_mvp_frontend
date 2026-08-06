@@ -124,7 +124,7 @@ export function OutsourcingPlaceholder({
     void (async () => {
       try {
         const list = await getMineWiseFunctionList(projectId)
-        if (cancelled || list.length === 0) return
+        if (cancelled) return
         setFunctionCatalog(
           list.map((fn) => ({
             id: fn.function_master_id,
@@ -132,7 +132,7 @@ export function OutsourcingPlaceholder({
           })),
         )
       } catch {
-        // Keep SECTOR_CATALOG fallback when the mine has no functions yet.
+        if (!cancelled) setFunctionCatalog([])
       }
     })()
     return () => {
@@ -140,14 +140,19 @@ export function OutsourcingPlaceholder({
     }
   }, [projectId])
 
-  const currentFunctionId =
-    searchParams.get('sector') || functionCatalog[0]?.id || ''
+  const sectorParam = searchParams.get('sector') || ''
+  const currentFunctionId = useMemo(() => {
+    if (
+      sectorParam &&
+      functionCatalog.some((fn) => fn.id === sectorParam)
+    ) {
+      return sectorParam
+    }
+    return functionCatalog[0]?.id || ''
+  }, [sectorParam, functionCatalog])
   const currentFunction = useMemo(
     () =>
-      functionCatalog.find((sector: { id: string; name: string }) => sector.id === currentFunctionId) ??
-      (currentFunctionId
-        ? { id: currentFunctionId, name: 'Selected function' }
-        : functionCatalog[0]),
+      functionCatalog.find((fn) => fn.id === currentFunctionId) ?? null,
     [currentFunctionId, functionCatalog],
   )
 
@@ -327,12 +332,14 @@ export function OutsourcingPlaceholder({
   }
 
   async function handleSave() {
-    const functionId =
-      currentFunction?.id || currentFunctionId || functionCatalog[0]?.id
-    if (!functionId) {
+    const functionId = currentFunction?.id || ''
+    if (!functionId || !functionCatalog.some((fn) => fn.id === functionId)) {
       setSavedMessage(null)
       setErrors({
-        partialAgent: 'Select a cost function before saving.',
+        partialAgent:
+          functionCatalog.length === 0
+            ? 'No cost functions are linked to this mine yet. Open Home and select a mine that has cost functions.'
+            : 'Select a valid cost function from the sidebar before saving.',
       })
       return
     }
@@ -452,6 +459,22 @@ export function OutsourcingPlaceholder({
           </Button>
         ) : null}
       </div>
+
+      {functionCatalog.length === 0 || !currentFunctionId ? (
+        <p
+          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          role="status"
+        >
+          No cost functions are linked to this mine yet. Pick another project
+          from the list, or wait until Nest returns mine-wise functions — then
+          select one in the sidebar before saving.
+        </p>
+      ) : null}
+      {errors.partialAgent ? (
+        <p className="text-sm text-red-600" role="alert">
+          {errors.partialAgent}
+        </p>
+      ) : null}
 
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium text-portal-navy">

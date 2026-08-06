@@ -128,6 +128,7 @@ function ProjectDetailsContent() {
   const [phaseTypes, setPhaseTypes] =
     useState<PhaseTypeMaster[]>(EMPTY_PHASE_TYPES)
   const [mineFunctions, setMineFunctions] = useState<MineFunction[]>([])
+  const [mineFunctionsLoading, setMineFunctionsLoading] = useState(false)
   const [deliveryMode, setDeliveryMode] = useState<DeliveryModeCode | null>(
     null,
   )
@@ -142,7 +143,7 @@ function ProjectDetailsContent() {
   const [partialSettingsLoading, setPartialSettingsLoading] = useState(false)
   const estimationDirtyRef = useRef(false)
 
-  const functionMasterId = searchParams.get('sector') || ''
+  const sectorParam = searchParams.get('sector') || ''
 
   useEffect(() => {
     let cancelled = false
@@ -193,21 +194,73 @@ function ProjectDetailsContent() {
   useEffect(() => {
     if (!activeMineId) {
       setMineFunctions([])
+      setMineFunctionsLoading(false)
       return
     }
     let cancelled = false
+    setMineFunctionsLoading(true)
     void (async () => {
       try {
         const list = await getMineWiseFunctionList(activeMineId)
         if (!cancelled) setMineFunctions(list)
       } catch {
         if (!cancelled) setMineFunctions([])
+      } finally {
+        if (!cancelled) setMineFunctionsLoading(false)
       }
     })()
     return () => {
       cancelled = true
     }
   }, [activeMineId])
+
+  // Drop / replace stale ?sector= when it is not on this mine.
+  useEffect(() => {
+    if (!activeMineId || mineFunctionsLoading) return
+    const current = searchParams.get('sector')
+    if (!current) {
+      if (mineFunctions[0]?.function_master_id) {
+        const next = new URLSearchParams(searchParams.toString())
+        next.set('sector', mineFunctions[0].function_master_id)
+        router.replace(
+          `${routes.projects.detail(activeMineId)}?${next.toString()}`,
+          { scroll: false },
+        )
+      }
+      return
+    }
+    if (mineFunctions.some((fn) => fn.function_master_id === current)) return
+
+    const next = new URLSearchParams(searchParams.toString())
+    if (mineFunctions[0]?.function_master_id) {
+      next.set('sector', mineFunctions[0].function_master_id)
+    } else {
+      next.delete('sector')
+    }
+    const qs = next.toString()
+    router.replace(
+      qs
+        ? `${routes.projects.detail(activeMineId)}?${qs}`
+        : routes.projects.detail(activeMineId),
+      { scroll: false },
+    )
+  }, [
+    mineFunctionsLoading,
+    mineFunctions,
+    searchParams,
+    activeMineId,
+    router,
+  ])
+
+  const functionMasterId = useMemo(() => {
+    if (
+      sectorParam &&
+      mineFunctions.some((fn) => fn.function_master_id === sectorParam)
+    ) {
+      return sectorParam
+    }
+    return mineFunctions[0]?.function_master_id || ''
+  }, [sectorParam, mineFunctions])
 
   const activeFunction = useMemo(
     () =>
@@ -384,6 +437,8 @@ function ProjectDetailsContent() {
       (deliveryMode === 'outsourcing' && !partialSettingsLoading))
 
   const waitingForFunction = !functionMasterId
+  const noFunctionsForMine =
+    !mineFunctionsLoading && mineFunctions.length === 0 && Boolean(activeMineId)
 
   return (
     <div className="min-w-0 space-y-5">
@@ -447,14 +502,17 @@ function ProjectDetailsContent() {
       {!modeReady ||
       showModeModal ||
       minesLoading ||
+      mineFunctionsLoading ||
       waitingForFunction ||
       waitingForActiveFit ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
           {showModeModal
             ? 'Choose a delivery mode for this cost function…'
-            : waitingForFunction
-              ? 'Select a cost function…'
-              : 'Loading…'}
+            : noFunctionsForMine
+              ? 'No cost functions for this mine. Select another project from the list.'
+              : waitingForFunction || mineFunctionsLoading
+                ? 'Select a cost function…'
+                : 'Loading…'}
         </div>
       ) : deliveryMode === 'outsourcing' && partialSettingsLoading ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">

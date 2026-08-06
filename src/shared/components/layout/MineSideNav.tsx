@@ -86,14 +86,24 @@ export function MineSideNav({ collapsed = false, className }: MineSideNavProps) 
 
   const activeSectorId = searchParams.get('sector') || functions[0]?.function_master_id || ''
 
-  // Default the URL to the first mine function when none is selected yet.
+  // Keep ?sector= in sync with mine-wise functions. Clear stale UUIDs that are
+  // not on this mine (e.g. ?sector=33333333-… after switching projects).
   useEffect(() => {
-    if (loading || functions.length === 0) return
+    if (loading) return
     const current = searchParams.get('sector')
+    const next = new URLSearchParams(searchParams.toString())
+
+    if (functions.length === 0) {
+      if (!current) return
+      next.delete('sector')
+      const qs = next.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+      return
+    }
+
     if (current && functions.some((fn) => fn.function_master_id === current)) {
       return
     }
-    const next = new URLSearchParams(searchParams.toString())
     next.set('sector', functions[0].function_master_id)
     router.replace(`${pathname}?${next.toString()}`, { scroll: false })
   }, [loading, functions, searchParams, pathname, router])
