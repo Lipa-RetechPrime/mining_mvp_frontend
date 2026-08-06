@@ -95,7 +95,6 @@ export function CostItemsDraftForm({
   electrificationPercent,
   onSubmit,
   onCancel,
-  submitLabel = 'Submit',
 }: {
   phaseTypes: PhaseTypeMaster[]
   blockId: string
@@ -109,7 +108,6 @@ export function CostItemsDraftForm({
     electrificationPercent: number | null,
   ) => Promise<void> | void
   onCancel?: () => void
-  submitLabel?: string
 }) {
   void _phaseTypes
   const { success } = useToast()
@@ -365,7 +363,7 @@ export function CostItemsDraftForm({
         stepCount={steps.length}
         showSubmit
         submitting={saving}
-        isEditing={submitLabel === 'Update'}
+        isEditing={false}
         onCancel={onCancel}
         onAddStep={() => {
           if (!saving) {

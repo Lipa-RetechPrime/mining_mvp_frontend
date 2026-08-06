@@ -143,7 +143,7 @@ export async function upsertPartialOutsourcingConfig(
         json: {
           function_investment_type_id: existingId,
           function_master_id,
-          investment_type_id: 'PO',
+          investment_type_id: 'partial-outsourcing',
           payback_period: payload.payback_period,
           contribution_percentage: payload.contribution_percentage,
           escalation_percentage: payload.escalation_percentage,
@@ -164,7 +164,7 @@ export async function upsertPartialOutsourcingConfig(
       method: 'POST',
       json: {
         function_master_id,
-        investment_type_id: 'PO',
+        investment_type_id: 'partial-outsourcing',
         payback_period: payload.payback_period,
         contribution_percentage: payload.contribution_percentage,
         escalation_percentage: payload.escalation_percentage,
@@ -261,7 +261,7 @@ export async function upsertFullOutsourcingConfig(
         json: {
           function_investment_type_id: existingId,
           function_master_id,
-          investment_type_id: 'FO',
+          investment_type_id: 'full-outsourcing',
           payback_period: payload.payback_period,
           escalation_percentage: payload.escalation_percentage,
           from_payback_start,
@@ -284,7 +284,7 @@ export async function upsertFullOutsourcingConfig(
       method: 'POST',
       json: {
         function_master_id,
-        investment_type_id: 'FO',
+        investment_type_id: 'full-outsourcing',
         payback_period: payload.payback_period,
         escalation_percentage: payload.escalation_percentage,
         from_payback_start,
@@ -353,7 +353,11 @@ export function fitToFullSettings(
 
 async function createInvestmentTypeStub(
   functionMasterId: string,
-  investmentTypeId: 'OW' | 'PO' | 'FO' | 'AH',
+  investmentTypeId:
+    | 'ownership'
+    | 'partial-outsourcing'
+    | 'full-outsourcing'
+    | 'adhoc-outsourcing',
 ): Promise<FunctionInvestmentTypeRecord> {
   const function_master_id = functionMasterId.trim()
   if (!function_master_id) {
@@ -418,7 +422,7 @@ export async function resolveDeliveryModeFromApi(
 
 /**
  * Persist delivery mode choice.
- * Ownership → creates OW via investment-type/create immediately.
+ * Ownership → creates ownership FIT via investment-type/create immediately.
  * Outsourcing → stores preference only; create runs when the user saves
  * Partial/Full/Adhoc config details.
  */
@@ -428,11 +432,11 @@ export async function persistDeliveryModeChoice(
 ): Promise<void> {
   setPreferredDeliveryMode(functionMasterId, mode)
   if (mode === 'ownership') {
-    await createInvestmentTypeStub(functionMasterId, 'OW')
+    await createInvestmentTypeStub(functionMasterId, 'ownership')
   }
 }
 
-/** Ensure an AH stub exists for Adhoc cost-item isolation. */
+/** Ensure an adhoc-outsourcing stub exists for Adhoc cost-item isolation. */
 export async function ensureAdhocOutsourcingStub(
   functionMasterId: string,
 ): Promise<FunctionInvestmentTypeRecord> {
@@ -441,5 +445,5 @@ export async function ensureAdhocOutsourcingStub(
     'adhoc-outsourcing',
   )
   if (existing) return existing
-  return createInvestmentTypeStub(functionMasterId, 'AH')
+  return createInvestmentTypeStub(functionMasterId, 'adhoc-outsourcing')
 }

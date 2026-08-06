@@ -23,6 +23,8 @@ import {
   getFunctionInvestmentTypeDetails,
   persistDeliveryModeChoice,
   resolveDeliveryModeFromApi,
+  softFullFieldsFromFit,
+  softPartialFieldsFromFit,
 } from '@/features/estimations/api/functionInvestmentType'
 import {
   getPreferredOutsourcingKind,
@@ -66,6 +68,8 @@ async function loadOutsourcingSettings(
 
   const partial = fitToPartialSettings(partialFit)
   const full = fitToFullSettings(fullFit)
+  const softPartial = softPartialFieldsFromFit(partialFit)
+  const softFull = softFullFieldsFromFit(fullFit)
 
   if (prefer === 'full' && full) {
     return {
@@ -83,6 +87,43 @@ async function loadOutsourcingSettings(
       escalationPercent: partial.escalationPercent,
       paybackPeriodYears: partial.paybackPeriodYears,
       functionInvestmentTypeId: partial.functionInvestmentTypeId,
+    }
+  }
+
+  // Soft fallthrough — still open estimation when FIT exists with complete-enough fields.
+  if (prefer === 'full' && softFull) {
+    if (
+      softFull.paybackPeriodYears != null &&
+      softFull.paybackPeriodYears > 0 &&
+      softFull.escalationPercent != null &&
+      softFull.escalationPercent >= 0 &&
+      softFull.paybackStartPhase
+    ) {
+      return {
+        kind: 'full',
+        escalationPercent: softFull.escalationPercent,
+        paybackPeriodYears: softFull.paybackPeriodYears,
+        paybackStartPhase: softFull.paybackStartPhase,
+        functionInvestmentTypeId: softFull.functionInvestmentTypeId,
+      }
+    }
+  }
+  if (prefer === 'partial' && softPartial) {
+    if (
+      softPartial.paybackPeriodYears != null &&
+      softPartial.paybackPeriodYears > 0 &&
+      softPartial.contributionPercentage != null &&
+      softPartial.contributionPercentage >= 0 &&
+      softPartial.escalationPercent != null &&
+      softPartial.escalationPercent >= 0
+    ) {
+      return {
+        kind: 'partial',
+        contributionPercentage: softPartial.contributionPercentage,
+        escalationPercent: softPartial.escalationPercent,
+        paybackPeriodYears: softPartial.paybackPeriodYears,
+        functionInvestmentTypeId: softPartial.functionInvestmentTypeId,
+      }
     }
   }
 
@@ -286,6 +327,10 @@ function ProjectDetailsContent() {
     setModeReady(false)
     setPartialSettingsLoading(true)
     setForceOutsourcingConfig(false)
+    // Drop prior function's FIT/settings immediately so we never scope the
+    // new function with the previous function's outsourcing FIT id.
+    setOutsourcingPartial(null)
+    setOwnershipFitId(null)
 
     void (async () => {
       try {
@@ -468,15 +513,16 @@ function ProjectDetailsContent() {
               Projects / Mines
             </span>
             <select
-              className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-portal-navy outline-none transition focus:border-portal-purple focus:ring-1 focus:ring-portal-purple/30"
-              value={selectedValue}
+              className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-portal-navy outline-none transition focus:border-portal-purple focus:ring-1 focus:ring-portal-purple/30 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+              value={mineOptions.length === 0 ? '' : selectedValue}
               onChange={(event) => handleSelectChange(event.target.value)}
-              disabled={minesLoading}
+              disabled={minesLoading || mineOptions.length === 0}
+              aria-label="Projects / Mines"
             >
-              {mineOptions.length === 0 ? (
-                <option value={decodedId}>
-                  {minesLoading ? 'Loading…' : decodedId || 'No mines'}
-                </option>
+              {minesLoading ? (
+                <option value="">Loading…</option>
+              ) : mineOptions.length === 0 ? (
+                <option value="">No mines available</option>
               ) : (
                 mineOptions.map((mine) => {
                   const lastUpdated = formatLastUpdated(mine.updatedAt)

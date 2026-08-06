@@ -237,7 +237,12 @@ function EstimationTableCard({  estimation,
     scopedEstimation.blocks.find((candidate) => candidate.sectorId === functionMasterId) ??
     scopedEstimation.blocks[0]
   const displaySectorName =
-    functionName?.trim() || block?.sectorName || 'Cost function'
+    functionName?.trim() ||
+    (block?.sectorName?.trim() &&
+    block.sectorName.trim().toLowerCase() !== 'cost function'
+      ? block.sectorName.trim()
+      : '') ||
+    'Cost function'
   const tabs = block?.entityTabs ?? []
   const [activeEntityId, setActiveEntityId] = useState(() => OVERALL_TAB_ID)
   const [addingCostItems, setAddingCostItems] = useState(false)
@@ -574,7 +579,6 @@ function EstimationTableCard({  estimation,
                 electrificationPercent={
                   scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
                 }
-                submitLabel="Submit"
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
               />
@@ -592,7 +596,6 @@ function EstimationTableCard({  estimation,
           electrificationPercent={
             scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
           }
-          submitLabel="Submit"
           onSubmit={handleSaveSteps}
         />
       ) : null}

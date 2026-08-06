@@ -254,7 +254,14 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
   const mine_name = estimation.siteSubtitle?.trim() || 'Chuperbhita Simlong OCP'
 
   const block = estimation.blocks[0]
-  const function_name = block?.sectorName?.trim() || 'Residential buildings'
+  const rawFunctionName = block?.sectorName?.trim() || ''
+  const lowerName = rawFunctionName.toLowerCase()
+  const function_name =
+    rawFunctionName &&
+    lowerName !== 'cost function' &&
+    lowerName !== 'selected function'
+      ? rawFunctionName
+      : rawFunctionName || 'Cost function'
   // Prefer sectorId (nav ?sector= / function_master_id). Never invent a random UUID.
   const function_master_id =
     asUuidOrNull(block?.sectorId) || asUuidOrNull(block?.id)
@@ -392,15 +399,24 @@ export function mapDtoToEstimation(dto: InvestmentDto): Estimation {
       }
     })
 
+    const nameFromItems =
+      orderedEntities
+        .flatMap((entity) => entity.costItems ?? [])
+        .find(
+          (item) =>
+            (item.function_master_id?.trim() || dto.function_master_id?.trim()) ===
+              functionId && item.function_name?.trim(),
+        )
+        ?.function_name?.trim() || ''
+
     return {
       id: `blk-${functionId}`,
       sectorId: functionId,
-      // Only the DTO's primary function has a reliable name. Other function
-      // blocks must not inherit that name (e.g. Hauling → Blasting).
       sectorName:
-        functionId === dto.function_master_id?.trim()
+        nameFromItems ||
+        (functionId === dto.function_master_id?.trim()
           ? dto.function_name?.trim() || 'Cost function'
-          : 'Cost function',
+          : 'Cost function'),
       activeEntityId: entityTabs[0]?.entityId ?? '',
       entityTabs,
     }

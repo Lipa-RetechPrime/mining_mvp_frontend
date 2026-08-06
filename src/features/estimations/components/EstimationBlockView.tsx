@@ -140,6 +140,7 @@ export function EstimationBlockView({
   block,
   appendixLabel,
   siteSubtitle,
+  sectorDisplayName,
   showSubmit,
   onSubmit,
   onCancel,
@@ -149,6 +150,8 @@ export function EstimationBlockView({
   block: Block
   appendixLabel: string
   siteSubtitle: string
+  /** Prefer nav / mine-wise function name when block.sectorName is a placeholder. */
+  sectorDisplayName?: string | null
   showSubmit?: boolean
   onSubmit?: () => void
   onCancel?: () => void
@@ -160,6 +163,13 @@ export function EstimationBlockView({
   const { success } = useToast()
   const tab =
     block.entityTabs.find((t) => t.entityId === block.activeEntityId) ?? block.entityTabs[0]
+  const headerName = (() => {
+    const fromNav = sectorDisplayName?.trim() || ''
+    if (fromNav) return fromNav
+    const fromBlock = block.sectorName?.trim() || ''
+    if (fromBlock && fromBlock.toLowerCase() !== 'cost function') return fromBlock
+    return fromBlock || 'Cost function'
+  })()
   const [collapsedById, setCollapsedById] = useState<Record<string, boolean>>({})
   const [pendingRemove, setPendingRemove] = useState<{
     stepId: string
@@ -234,7 +244,7 @@ export function EstimationBlockView({
   return (
     <article className="mb-5 rounded-card bg-white px-6 py-7 sm:px-8 sm:py-8">
       <EstimationBlockHeader
-        sectorName={block.sectorName}
+        sectorName={headerName}
         appendixLabel={appendixLabel}
         siteSubtitle={siteSubtitle}
       />

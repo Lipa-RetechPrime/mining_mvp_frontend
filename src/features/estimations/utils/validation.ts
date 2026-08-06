@@ -1,4 +1,4 @@
-import { phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calculations'
+import { MONEY_SUM_EPSILON, phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calculations'
 import { formatAmount } from './formatAmount'
 import { DEFAULT_INITIAL_PHASE_COUNT } from '../phases/phaseTypes'
 import { isStepPopulated } from '../api/investments/domain'
@@ -18,8 +18,8 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
 
 /**
  * Ownership (`strict`): filled phase values must sum to Amount.
- * Partial: at least one phase value required; sum need not equal Amount
- *   (contributor share is below total; escalated remainder goes on Overall).
+ * Partial: at least one phase value required; sum of entered (pre-contribution%)
+ *   phase values must not exceed Amount; under-Amount is allowed.
  * Full: no phase entry required.
  */
 export type PhaseValidationMode = 'strict' | 'partial' | 'full'
@@ -55,9 +55,18 @@ export function phaseAmountSumError(
     return 'Enter a value in at least one phase.'
   }
 
-  // Partial: contributor amounts are a share of phase values; they do not need to
-  // cover 100% of Amount (remainder is escalated on the Overall sheet).
-  if (mode === 'partial') return null
+  // Partial: sum of entered phase values (before contribution%) must not exceed Amount.
+  if (mode === 'partial') {
+    const amount = step.amount ?? 0
+    const sum = filled.reduce(
+      (acc, phase) => acc + resolvePhaseValue(phase, amount),
+      0,
+    )
+    if (sum > amount + MONEY_SUM_EPSILON) {
+      return `Phase values must not exceed Amount (${formatAmount(amount)}); current sum is ${formatAmount(sum)}`
+    }
+    return null
+  }
 
   if (phaseValuesSumToAmount(filled, step.amount ?? 0)) return null
   const sum = filled.reduce(
