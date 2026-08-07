@@ -508,7 +508,7 @@ export function OutsourcingPlaceholder({
           </p>
         </div>
         {onChangeMode ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onChangeMode}>
+          <Button type="button" variant="outline" size="sm" onClick={onChangeMode}>
             Change delivery mode
           </Button>
         ) : null}

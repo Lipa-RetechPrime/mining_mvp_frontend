@@ -493,7 +493,7 @@ function EstimationTableCard({  estimation,
               <MaterialIcon name="edit" size={14} />
               Edit
             </Button>
-            <Button
+            {/* <Button
               variant="outline"
               className="!px-2 !py-1.5 !text-xs text-white border-red-600 hover:text-red-700 bg-red-600 hover:bg-white hover:text-red-600 "
               onClick={() => setPendingDelete({ kind: 'table' })}
@@ -501,7 +501,7 @@ function EstimationTableCard({  estimation,
             >
               <MaterialIcon name="delete" size={14}/>
               Delete
-            </Button>
+            </Button> */}
           </>
         }
       />
