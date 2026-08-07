@@ -200,12 +200,18 @@ export function EstimationScreen({
     openedMineIdRef.current = null;
   }, [activeSectorId, functionInvestmentTypeId]);
 
-  // Persist “has items” for the active function + FIT only.
+  // Persist “has items” for the active function + FIT on this mine only.
   const activeFunctionHasItems = useMemo(() => {
     if (!activeSectorId || !functionInvestmentTypeId) return false
+    const nameKey = (mineName || '').trim().toLowerCase()
     const mineItem =
       items.find((item) => item.id === mineId || item.mine_id === mineId) ??
-      items[0]
+      (nameKey
+        ? items.find(
+            (item) =>
+              (item.siteSubtitle || '').trim().toLowerCase() === nameKey,
+          )
+        : undefined)
     if (!mineItem) return false
     const scoped = scopeEstimationToInvestmentType(
       mineItem,
@@ -222,11 +228,25 @@ export function EstimationScreen({
   }, [
     items,
     mineId,
+    mineName,
     activeSectorId,
     activeSector.name,
     functionInvestmentTypeId,
     outsourcingPartial,
   ])
+
+  // Drop in-memory estimation when navigating to a different mine.
+  useEffect(() => {
+    if (!mineId?.trim()) return
+    const currentMine = estimation.mine_id || estimation.id
+    if (currentMine && currentMine !== mineId) {
+      dispatch({ type: 'SET_ESTIMATION', payload: EMPTY_ESTIMATION })
+      openedMineIdRef.current = null
+      seededEmptyFunctionRef.current = null
+      setModeOverride(null)
+      setEditingExisting(false)
+    }
+  }, [mineId, estimation.mine_id, estimation.id, dispatch])
 
   const pageMode: PageMode =
     modeOverride ??
@@ -270,8 +290,7 @@ export function EstimationScreen({
 
     const current = estimationRef.current;
     const existingMineId = current.mine_id || mineId || undefined;
-    const siteSubtitle =
-      current.siteSubtitle || mineName || "Chuperbhita Simlong OCP";
+    const siteSubtitle = mineName || current.siteSubtitle || ''
     const appendixLabel = current.appendixLabel || "APPENDIX A 2.2";
     const phaseLimit = current.phaseLimit ?? null;
 
@@ -334,7 +353,7 @@ export function EstimationScreen({
           entities,
         ),
         ...(mineId ? { id: mineId, mine_id: mineId } : {}),
-        siteSubtitle: mineName || estimation.siteSubtitle || "Chuperbhita Simlong OCP",
+        siteSubtitle: mineName || estimation.siteSubtitle || '',
       },
     });
     seededEmptyFunctionRef.current = activeSector.id;
@@ -477,6 +496,8 @@ export function EstimationScreen({
         <CostItemsTable
           items={items}
           phaseTypes={phaseTypes}
+          mineId={mineId}
+          mineName={mineName}
           functionMasterId={activeSectorId || null}
           functionName={activeSector.name || null}
           functionInvestmentTypeId={functionInvestmentTypeId}

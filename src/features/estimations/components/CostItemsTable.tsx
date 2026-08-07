@@ -621,6 +621,8 @@ function EstimationTableCard({  estimation,
 export function CostItemsTable({
   items,
   phaseTypes,
+  mineId,
+  mineName,
   functionMasterId,
   functionName,
   functionInvestmentTypeId,
@@ -632,6 +634,9 @@ export function CostItemsTable({
 }: {
   items: Estimation[]
   phaseTypes: PhaseTypeMaster[]
+  /** When set, only this mine's estimation card is shown. */
+  mineId?: string | null
+  mineName?: string | null
   functionMasterId?: string | null
   functionName?: string | null
   functionInvestmentTypeId?: string | null
@@ -642,12 +647,24 @@ export function CostItemsTable({
   onItemUpdated: (estimation: Estimation) => void
 }) {
   const saved = items.filter((e) => Boolean(e.id))
+  const nameKey = (mineName || '').trim().toLowerCase()
+  const mineScoped = mineId?.trim()
+    ? saved.filter(
+        (e) =>
+          e.id === mineId ||
+          e.mine_id === mineId ||
+          (nameKey
+            ? (e.siteSubtitle || '').trim().toLowerCase() === nameKey
+            : false),
+      )
+    : saved
 
-  if (saved.length === 0) {
+  if (mineScoped.length === 0) {
     return (
       <div className="rounded-card bg-white px-6 py-10 text-center">
         <p className="text-sm text-gray-500">
-          No submitted cost items yet. Click &quot;+ Add New Cost Estimation&quot; to begin.
+          No submitted cost items yet for this mine. Click &quot;+ Add New Cost
+          Estimation&quot; to begin.
         </p>
       </div>
     )
@@ -655,7 +672,7 @@ export function CostItemsTable({
 
   return (
     <div>
-      {saved.map((estimation) => (
+      {mineScoped.map((estimation) => (
         <EstimationTableCard
           key={estimation.id}
           estimation={estimation}

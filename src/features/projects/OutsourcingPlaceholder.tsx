@@ -269,7 +269,7 @@ export function OutsourcingPlaceholder({
         const fullSettings = fitToFullSettings(fullFit)
         const partialSettings = fitToPartialSettings(partialFit)
         const preferred =
-          getPreferredOutsourcingKind(currentFunctionId) ??
+          getPreferredOutsourcingKind(projectId, currentFunctionId) ??
           (partialSettings
             ? 'partial'
             : fullSettings
@@ -419,7 +419,7 @@ export function OutsourcingPlaceholder({
         setPartialFitId(saved.function_investment_type_id)
         setPartialFitRecord(saved)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'partial')
+        setPreferredOutsourcingKind(projectId, functionId, 'partial')
         // Prefer API record; fall back to the form values we just saved so a
         // sparse create/update response cannot block opening the cost form.
         const fromApi = fitToPartialSettings(saved)
@@ -447,7 +447,7 @@ export function OutsourcingPlaceholder({
         setFullFitId(saved.function_investment_type_id)
         setFullFitRecord(saved)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'full')
+        setPreferredOutsourcingKind(projectId, functionId, 'full')
         const fromApi = fitToFullSettings(saved)
         const settings: OutsourcingContributionSettings = {
           kind: 'full',
@@ -465,7 +465,7 @@ export function OutsourcingPlaceholder({
         const saved = await ensureAdhocOutsourcingStub(functionId)
         setAdhocFitId(saved.function_investment_type_id)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'adhoc')
+        setPreferredOutsourcingKind(projectId, functionId, 'adhoc')
         onContinueToEstimation?.('adhoc', {
           kind: 'adhoc',
           functionInvestmentTypeId: saved.function_investment_type_id,

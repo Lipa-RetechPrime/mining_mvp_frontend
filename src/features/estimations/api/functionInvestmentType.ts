@@ -468,10 +468,12 @@ import {
  * Outsourcing may be preferred before any PO/FO/AH row exists (create runs on config save).
  */
 export async function resolveDeliveryModeFromApi(
+  mineId: string,
   functionMasterId: string,
 ): Promise<'ownership' | 'outsourcing' | null> {
   const id = functionMasterId.trim()
-  if (!id) return null
+  const mine = mineId.trim()
+  if (!id || !mine) return null
 
   const [partial, full, adhoc, ownership] = await Promise.all([
     getFunctionInvestmentTypeDetails(id, 'partial-outsourcing'),
@@ -480,8 +482,8 @@ export async function resolveDeliveryModeFromApi(
     getFunctionInvestmentTypeDetails(id, 'ownership'),
   ])
 
-  const preferred = getPreferredDeliveryMode(id)
-  // Honor explicit preference even when outsourcing FIT rows do not exist yet.
+  const preferred = getPreferredDeliveryMode(mine, id)
+  // Honor explicit per-mine preference even when FIT rows do not exist yet.
   if (preferred === 'outsourcing') return 'outsourcing'
   if (preferred === 'ownership' && ownership) return 'ownership'
   if (preferred === 'ownership' && !partial && !full && !adhoc) {
@@ -497,16 +499,17 @@ export async function resolveDeliveryModeFromApi(
 }
 
 /**
- * Persist delivery mode choice.
+ * Persist delivery mode choice for this mine + function.
  * Ownership → creates ownership FIT via investment-type/create immediately.
  * Outsourcing → stores preference only; create runs when the user saves
  * Partial/Full/Adhoc config details.
  */
 export async function persistDeliveryModeChoice(
+  mineId: string,
   functionMasterId: string,
   mode: 'ownership' | 'outsourcing',
 ): Promise<void> {
-  setPreferredDeliveryMode(functionMasterId, mode)
+  setPreferredDeliveryMode(mineId, functionMasterId, mode)
   if (mode === 'ownership') {
     await createInvestmentTypeStub(functionMasterId, 'ownership')
   }

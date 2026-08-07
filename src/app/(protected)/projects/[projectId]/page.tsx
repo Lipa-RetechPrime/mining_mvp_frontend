@@ -48,6 +48,7 @@ function mineKey(mine: MineListItem): string {
 const EMPTY_PHASE_TYPES: PhaseTypeMaster[] = []
 
 async function loadOutsourcingSettings(
+  mineId: string,
   functionMasterId: string,
   preferredKind?: OutsourcingContributionKind | null,
 ): Promise<OutsourcingContributionSettings | null> {
@@ -57,7 +58,7 @@ async function loadOutsourcingSettings(
     getFunctionInvestmentTypeDetails(functionMasterId, 'adhoc-outsourcing'),
   ])
   const prefer =
-    preferredKind ?? getPreferredOutsourcingKind(functionMasterId)
+    preferredKind ?? getPreferredOutsourcingKind(mineId, functionMasterId)
 
   if (prefer === 'adhoc' && adhocFit) {
     return {
@@ -334,13 +335,19 @@ function ProjectDetailsContent() {
 
     void (async () => {
       try {
-        const mode = await resolveDeliveryModeFromApi(functionMasterId)
+        const mode = await resolveDeliveryModeFromApi(
+          activeMineId,
+          functionMasterId,
+        )
         if (cancelled) return
         setDeliveryMode(mode)
         setShowModeModal(!mode)
 
         if (mode === 'outsourcing') {
-          const settings = await loadOutsourcingSettings(functionMasterId)
+          const settings = await loadOutsourcingSettings(
+            activeMineId,
+            functionMasterId,
+          )
           if (cancelled) return
           setOutsourcingPartial(settings)
           setOwnershipFitId(null)
@@ -392,7 +399,10 @@ function ProjectDetailsContent() {
     setPartialSettingsLoading(true)
     void (async () => {
       try {
-        const settings = await loadOutsourcingSettings(functionMasterId)
+        const settings = await loadOutsourcingSettings(
+          activeMineId,
+          functionMasterId,
+        )
         if (cancelled) return
         setOutsourcingPartial(settings)
       } catch {
@@ -406,6 +416,7 @@ function ProjectDetailsContent() {
     }
   }, [
     functionMasterId,
+    activeMineId,
     deliveryMode,
     forceOutsourcingConfig,
     outsourcingPartial,
@@ -422,14 +433,15 @@ function ProjectDetailsContent() {
   }, [minesLoading, mineOptions, decodedId, router])
 
   function handleSelectChange(newMineId: string) {
+    if (!newMineId || newMineId === activeMineId) return
     router.push(routes.projects.detail(newMineId))
   }
 
   async function handleModalConfirm(mode: DeliveryModeCode) {
     if (!activeMineId || !functionMasterId) return
     try {
-      await persistDeliveryModeChoice(functionMasterId, mode)
-      setPreferredDeliveryMode(functionMasterId, mode)
+      await persistDeliveryModeChoice(activeMineId, functionMasterId, mode)
+      setPreferredDeliveryMode(activeMineId, functionMasterId, mode)
       setDeliveryMode(mode)
       setShowModeModal(false)
       setForceOutsourcingConfig(mode === 'outsourcing')
@@ -502,8 +514,8 @@ function ProjectDetailsContent() {
             Mine Details
           </h1>
           <p className="mt-1 text-sm text-gray-600">
-            Switch project or mine. Ownership / Outsourcing is set per cost
-            function.
+            Select a project/mine. Ownership / Outsourcing is set per cost
+            function for the selected mine.
           </p>
         </div>
 
@@ -589,7 +601,7 @@ function ProjectDetailsContent() {
             initialSettings={outsourcingPartial}
             onChangeMode={handleChangeMode}
             onContinueToEstimation={(kind, settings) => {
-              setPreferredOutsourcingKind(functionMasterId, kind)
+              setPreferredOutsourcingKind(activeMineId, functionMasterId, kind)
               setOutsourcingPartial(settings)
               setPartialSettingsLoading(false)
               setForceOutsourcingConfig(false)
