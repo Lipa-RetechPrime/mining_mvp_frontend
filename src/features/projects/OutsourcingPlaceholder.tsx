@@ -510,11 +510,11 @@ export function OutsourcingPlaceholder({
             .
           </p>
         </div>
-        {onChangeMode ? (
+        {/* {onChangeMode ? (
           <Button type="button" variant="outline" size="sm" onClick={onChangeMode}>
             Change delivery mode
           </Button>
-        ) : null}
+        ) : null} */}
       </div>
 
       {functionCatalog.length === 0 || !currentFunctionId ? (
