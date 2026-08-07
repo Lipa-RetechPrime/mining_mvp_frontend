@@ -10,6 +10,7 @@ import { formatAmount } from '../utils/formatAmount'
 import { phaseAmountSumError } from '../utils/validation'
 import { buildFullCostItemPaybackPhases } from '@/features/projects/partialContribution'
 import {
+  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   useOutsourcingPartial,
@@ -113,13 +114,19 @@ export function PhaseGrid({
   }
 
   const isPartial = isPartialOutsourcing(outsourcing)
+  const isAdhoc = isAdhocOutsourcing(outsourcing)
   const phaseLimit = minePhaseLimit ?? step.phaseLimit ?? null
   const canAddMore = canAddPhase(step.phases.length, phaseLimit)
   const remaining =
     phaseLimit != null ? Math.max(0, Math.floor(phaseLimit) - step.phases.length) : 0
   const addCount = nextPhaseBatchCount(step.phases.length, phaseLimit)
+  const phaseValidationMode = isAdhoc
+    ? 'adhoc'
+    : isPartial
+      ? 'partial'
+      : 'strict'
   const sumError =
-    phaseAmountSumError(step, isPartial ? 'partial' : 'strict') ??
+    phaseAmountSumError(step, phaseValidationMode) ??
     errors[`${errorPrefix}.phaseAmountSum`] ??
     null
   const overLimitError = errors[`${errorPrefix}.phaseLimit`] ?? null
@@ -132,9 +139,11 @@ export function PhaseGrid({
         <div className="min-w-0">
           <h4 className="text-[15px] font-semibold text-[--color-portal-navy]">Phasing of Investment</h4>
           <p className="mt-1 text-sm font-normal text-[--text-color]">
-            {isPartial
-              ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet.'
-              : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
+            {isAdhoc
+              ? 'Enter phase values manually. They do not need to sum to Amount.'
+              : isPartial
+                ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet.'
+                : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
           </p>
           {sumError ? (
             <p className="mt-1.5 text-sm text-red-600" role="alert">

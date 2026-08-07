@@ -25,6 +25,7 @@ import { CostItemsTable } from "./CostItemsTable";
 import { EmptyEstimationState } from "./EmptyEstimationState";
 import { EstimationBlockView } from "./EstimationBlockView";
 import {
+  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   OutsourcingPartialProvider,
@@ -80,9 +81,11 @@ export function EstimationScreen({
   const { submit, submitting } = useSubmitEstimation({
     phaseValidationMode: isFullOutsourcing(outsourcingPartial)
       ? "full"
-      : isPartialOutsourcing(outsourcingPartial)
-        ? "partial"
-        : "strict",
+      : isAdhocOutsourcing(outsourcingPartial)
+        ? "adhoc"
+        : isPartialOutsourcing(outsourcingPartial)
+          ? "partial"
+          : "strict",
   });
   const { items, loading, refresh, replaceItem, open, remove } =
     useEstimationList();

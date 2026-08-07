@@ -10,6 +10,7 @@ import {
 } from '../utils/formatAmount'
 import { contributorPhaseAmount } from '@/features/projects/partialContribution'
 import {
+  isAdhocOutsourcing,
   isPartialOutsourcing,
   useOutsourcingPartial,
 } from '@/features/projects/OutsourcingPartialContext'
@@ -31,7 +32,9 @@ export function PhaseCard({
   canRemove?: boolean
 }) {
   const outsourcingPartial = useOutsourcingPartial()
-  const isAuto = phase.calculationMode === 'automatic'
+  const isAdhoc = isAdhocOutsourcing(outsourcingPartial)
+  // Adhoc: manual phase values only — no Calculated (% of Amount) mode.
+  const isAuto = !isAdhoc && phase.calculationMode === 'automatic'
   const calculatedValue =
     isAuto && phase.percentage !== null
       ? computeAutomaticValue(stepAmount, phase.percentage)
@@ -48,6 +51,22 @@ export function PhaseCard({
 
   const [valueDraft, setValueDraft] = useState(() => formatAmount(phase.value))
   const valueFocused = useRef(false)
+
+  useEffect(() => {
+    if (!isAdhoc) return
+    if (phase.calculationMode === 'manual') return
+    const nextValue =
+      phase.percentage != null
+        ? computeAutomaticValue(stepAmount, phase.percentage)
+        : phase.value
+    onChange({
+      calculationMode: 'manual',
+      percentage: null,
+      value: nextValue,
+    })
+    // Coerce saved Calculated phases once when adhoc; avoid onChange identity loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when mode/adhoc changes
+  }, [isAdhoc, phase.calculationMode, phase.id, phase.percentage, stepAmount])
 
   useEffect(() => {
     if (valueFocused.current) return
@@ -139,18 +158,20 @@ export function PhaseCard({
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 rounded-lg bg-white p-3">
-      <RadioGroup
-        name={`mode-${phase.id}`}
-        legend="Calculation Mode"
-        value={phase.calculationMode}
-        onChange={(v) =>
-          onChange({ calculationMode: v as Phase['calculationMode'] })
-        }
-        options={[
-          { value: 'manual', label: 'Manual' },
-          { value: 'automatic', label: 'Calculated' },
-        ]}
-      />
+      {isAdhoc ? null : (
+        <RadioGroup
+          name={`mode-${phase.id}`}
+          legend="Calculation Mode"
+          value={phase.calculationMode}
+          onChange={(v) =>
+            onChange({ calculationMode: v as Phase['calculationMode'] })
+          }
+          options={[
+            { value: 'manual', label: 'Manual' },
+            { value: 'automatic', label: 'Calculated' },
+          ]}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         {phaseLabel}

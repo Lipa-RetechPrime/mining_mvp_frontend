@@ -15,6 +15,7 @@ import {
 import { isValid, validateStep } from '../utils/validation'
 import { useToast } from '../context/ToastContext'
 import {
+  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   useOutsourcingPartial,
@@ -114,9 +115,11 @@ export function CostItemsDraftForm({
   const outsourcing = useOutsourcingPartial()
   const phaseValidationMode = isFullOutsourcing(outsourcing)
     ? 'full'
-    : isPartialOutsourcing(outsourcing)
-      ? 'partial'
-      : 'strict'
+    : isAdhocOutsourcing(outsourcing)
+      ? 'adhoc'
+      : isPartialOutsourcing(outsourcing)
+        ? 'partial'
+        : 'strict'
   const [initialDraft] = useState(() => createExpandedDraft(minePhaseLimit))
   const [steps, setSteps] = useState<Step[]>([initialDraft.step])
   const [errors, setErrors] = useState<FieldErrors>({})

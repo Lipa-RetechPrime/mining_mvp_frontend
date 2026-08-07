@@ -20,8 +20,9 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
  * Ownership (`strict`) and Partial: filled origin phase values must sum to Amount
  * (Partial: before contribution%; contributor readout is display-only).
  * Full: no phase entry required.
+ * Adhoc: phases are manual only; values are not required to sum to Amount.
  */
-export type PhaseValidationMode = 'strict' | 'partial' | 'full'
+export type PhaseValidationMode = 'strict' | 'partial' | 'full' | 'adhoc'
 
 export type EstimationValidationOptions = {
   phaseValidationMode?: PhaseValidationMode
@@ -53,6 +54,9 @@ export function phaseAmountSumError(
     }
     return 'Enter a value in at least one phase.'
   }
+
+  // Adhoc: enter phase values freely; do not require sum to Amount.
+  if (mode === 'adhoc') return null
 
   // Ownership + Partial: origin phase values (manual value or Amount × %) must equal Amount.
   if (phaseValuesSumToAmount(filled, step.amount ?? 0)) return null

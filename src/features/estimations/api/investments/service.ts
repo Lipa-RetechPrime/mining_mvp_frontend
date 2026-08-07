@@ -183,7 +183,7 @@ function resolvePersistEntityId(
 function assertEstimationValidForSave(
   estimation: Estimation,
   options?: {
-    phaseValidationMode?: 'strict' | 'partial' | 'full'
+    phaseValidationMode?: 'strict' | 'partial' | 'full' | 'adhoc'
     skipPhaseAmountValidation?: boolean
   },
 ): void {
@@ -489,7 +489,7 @@ export async function updateEstimation(
   id: string,
   body: Estimation,
   options?: {
-    phaseValidationMode?: 'strict' | 'partial' | 'full'
+    phaseValidationMode?: 'strict' | 'partial' | 'full' | 'adhoc'
     skipPhaseAmountValidation?: boolean
   },
 ): Promise<Estimation> {

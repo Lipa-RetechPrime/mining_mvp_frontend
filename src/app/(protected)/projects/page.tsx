@@ -4,9 +4,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { Input } from '@/shared/components/ui/Input'
+import { Button } from '@/shared/components/ui/Button'
+import { Modal } from '@/shared/components/ui/Modal'
 import { routes } from '@/shared/config/routes'
 import { formatLastUpdated, sortMinesByLastUpdated } from '@/shared/utils/mineList'
 import { listMines, type MineListItem } from '@/features/estimations/api/mines'
+import { getMineWiseFunctionList } from '@/features/estimations/api/master'
+
+const NO_COST_FUNCTION_MESSAGE = 'There is no cost function in the mine.'
 
 export default function ProjectsPage() {
   const router = useRouter()
@@ -14,6 +19,8 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [openingMineId, setOpeningMineId] = useState<string | null>(null)
+  const [showNoFunctionsModal, setShowNoFunctionsModal] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -55,10 +62,25 @@ export default function ProjectsPage() {
     })
   }, [minesSorted, search])
 
-  function openProject(mine: MineListItem) {
-    if (!mine.mine_id) return
-    // Delivery mode is chosen per cost function after opening the mine.
-    router.push(routes.projects.detail(mine.mine_id))
+  async function openProject(mine: MineListItem) {
+    if (!mine.mine_id || openingMineId) return
+    setOpeningMineId(mine.mine_id)
+    try {
+      const functions = await getMineWiseFunctionList(mine.mine_id)
+      if (functions.length === 0) {
+        setShowNoFunctionsModal(true)
+        return
+      }
+      router.push(routes.projects.detail(mine.mine_id))
+    } catch (err) {
+      window.alert(
+        err instanceof Error
+          ? err.message
+          : 'Failed to check cost functions for this mine.',
+      )
+    } finally {
+      setOpeningMineId(null)
+    }
   }
 
   if (loading) {
@@ -171,17 +193,21 @@ export default function ProjectsPage() {
             <tbody className="divide-y divide-gray-100">
               {filteredMines.map((mine, index) => {
                 const lastUpdated = formatLastUpdated(mine.updatedAt)
+                const isOpening = openingMineId === mine.mine_id
 
                 return (
                   <tr
                     key={mine.mine_id}
                     tabIndex={0}
                     role="button"
-                    onClick={() => openProject(mine)}
+                    aria-busy={isOpening}
+                    onClick={() => {
+                      void openProject(mine)
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        openProject(mine)
+                        void openProject(mine)
                       }
                     }}
                     className="cursor-pointer transition hover:bg-gray-50/80 focus:bg-gray-50/80 focus:outline-none"
@@ -192,6 +218,11 @@ export default function ProjectsPage() {
                         {index === 0 && search.trim() === '' && lastUpdated ? (
                           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                             Latest
+                          </span>
+                        ) : null}
+                        {isOpening ? (
+                          <span className="text-xs font-normal text-gray-500">
+                            Checking…
                           </span>
                         ) : null}
                       </div>
@@ -216,6 +247,24 @@ export default function ProjectsPage() {
           </table>
         </div>
       )}
+
+      <Modal
+        open={showNoFunctionsModal}
+        title="No cost function"
+        onClose={() => setShowNoFunctionsModal(false)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button
+            variant="primary"
+            onClick={() => setShowNoFunctionsModal(false)}
+          >
+            OK
+          </Button>
+        }
+      >
+        <p className="text-sm text-portal-navy">{NO_COST_FUNCTION_MESSAGE}</p>
+      </Modal>
     </div>
   )
 }

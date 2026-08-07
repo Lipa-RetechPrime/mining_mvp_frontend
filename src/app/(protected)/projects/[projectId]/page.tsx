@@ -170,7 +170,11 @@ function ProjectDetailsContent() {
   const [phaseTypes, setPhaseTypes] =
     useState<PhaseTypeMaster[]>(EMPTY_PHASE_TYPES)
   const [mineFunctions, setMineFunctions] = useState<MineFunction[]>([])
-  const [mineFunctionsLoading, setMineFunctionsLoading] = useState(false)
+  const [mineFunctionsLoading, setMineFunctionsLoading] = useState(true)
+  /** Mine id whose function list fetch has completed (avoids false empty on mount). */
+  const [functionsFetchedForMine, setFunctionsFetchedForMine] = useState<
+    string | null
+  >(null)
   const [deliveryMode, setDeliveryMode] = useState<DeliveryModeCode | null>(
     null,
   )
@@ -183,6 +187,11 @@ function ProjectDetailsContent() {
     useState<OutsourcingContributionSettings | null>(null)
   const [ownershipFitId, setOwnershipFitId] = useState<string | null>(null)
   const [partialSettingsLoading, setPartialSettingsLoading] = useState(false)
+  const [showNoFunctionsModal, setShowNoFunctionsModal] = useState(false)
+  /** When true, closing the no-functions modal leaves mine details (deep link). */
+  const [leaveOnNoFunctionsDismiss, setLeaveOnNoFunctionsDismiss] =
+    useState(false)
+  const [checkingMineSwitch, setCheckingMineSwitch] = useState(false)
   const estimationDirtyRef = useRef(false)
 
   const sectorParam = searchParams.get('sector') || ''
@@ -237,9 +246,14 @@ function ProjectDetailsContent() {
     if (!activeMineId) {
       setMineFunctions([])
       setMineFunctionsLoading(false)
+      setFunctionsFetchedForMine(null)
       return
     }
     let cancelled = false
+    // Clear immediately so a previous mine's functions cannot open the
+    // delivery-mode modal while this mine's list is still loading.
+    setMineFunctions([])
+    setFunctionsFetchedForMine(null)
     setMineFunctionsLoading(true)
     void (async () => {
       try {
@@ -248,7 +262,10 @@ function ProjectDetailsContent() {
       } catch {
         if (!cancelled) setMineFunctions([])
       } finally {
-        if (!cancelled) setMineFunctionsLoading(false)
+        if (!cancelled) {
+          setMineFunctionsLoading(false)
+          setFunctionsFetchedForMine(activeMineId)
+        }
       }
     })()
     return () => {
@@ -312,10 +329,11 @@ function ProjectDetailsContent() {
   )
 
   // Delivery mode + outsourcing settings from FunctionInvestmentType API.
+  // Never prompt for delivery mode when this mine has no cost functions.
   useEffect(() => {
     if (!activeMineId || !functionMasterId) {
       setDeliveryMode(null)
-      setModeReady(false)
+      setModeReady(true)
       setShowModeModal(false)
       setForceOutsourcingConfig(false)
       setOutsourcingPartial(null)
@@ -432,9 +450,51 @@ function ProjectDetailsContent() {
     }
   }, [minesLoading, mineOptions, decodedId, router])
 
-  function handleSelectChange(newMineId: string) {
-    if (!newMineId || newMineId === activeMineId) return
-    router.push(routes.projects.detail(newMineId))
+  // Deep link / refresh on a mine with no cost functions — cannot stay on details.
+  useEffect(() => {
+    if (minesLoading || !decodedId) return
+    if (functionsFetchedForMine !== decodedId) return
+    const mineInList = mineOptions.some((mine) => mineKey(mine) === decodedId)
+    if (!mineInList) return
+    if (mineFunctions.length > 0) return
+    setLeaveOnNoFunctionsDismiss(true)
+    setShowNoFunctionsModal(true)
+  }, [
+    minesLoading,
+    functionsFetchedForMine,
+    mineFunctions.length,
+    mineOptions,
+    decodedId,
+  ])
+
+  function dismissNoFunctionsModal() {
+    setShowNoFunctionsModal(false)
+    if (leaveOnNoFunctionsDismiss) {
+      setLeaveOnNoFunctionsDismiss(false)
+      router.replace(routes.projects.list)
+    }
+  }
+
+  async function handleSelectChange(newMineId: string) {
+    if (!newMineId || newMineId === activeMineId || checkingMineSwitch) return
+    setCheckingMineSwitch(true)
+    try {
+      const functions = await getMineWiseFunctionList(newMineId)
+      if (functions.length === 0) {
+        setLeaveOnNoFunctionsDismiss(false)
+        setShowNoFunctionsModal(true)
+        return
+      }
+      router.push(routes.projects.detail(newMineId))
+    } catch (err) {
+      window.alert(
+        err instanceof Error
+          ? err.message
+          : 'Failed to check cost functions for this mine.',
+      )
+    } finally {
+      setCheckingMineSwitch(false)
+    }
   }
 
   async function handleModalConfirm(mode: DeliveryModeCode) {
@@ -501,11 +561,27 @@ function ProjectDetailsContent() {
 
   const waitingForFunction = !functionMasterId
   const noFunctionsForMine =
-    !mineFunctionsLoading && mineFunctions.length === 0 && Boolean(activeMineId)
+    functionsFetchedForMine === activeMineId &&
+    mineFunctions.length === 0 &&
+    Boolean(activeMineId)
+  /** Landed on / cannot stay on an empty mine — wait for redirect via modal. */
+  const blockingEmptyMine =
+    leaveOnNoFunctionsDismiss ||
+    (noFunctionsForMine &&
+      mineOptions.some((mine) => mineKey(mine) === decodedId))
 
   /** Block main content only before a first delivery-mode choice exists. */
   const showFirstTimeModeGate =
-    showModeModal && !deliveryMode
+    showModeModal &&
+    !deliveryMode &&
+    Boolean(functionMasterId) &&
+    !blockingEmptyMine
+
+  const deliveryModeModalOpen =
+    showModeModal &&
+    Boolean(functionMasterId) &&
+    !noFunctionsForMine &&
+    !blockingEmptyMine
 
   const functionOptions = useMemo(
     () =>
@@ -537,8 +613,15 @@ function ProjectDetailsContent() {
             <select
               className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-portal-navy outline-none transition focus:border-portal-purple focus:ring-1 focus:ring-portal-purple/30 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
               value={mineOptions.length === 0 ? '' : selectedValue}
-              onChange={(event) => handleSelectChange(event.target.value)}
-              disabled={minesLoading || mineOptions.length === 0}
+              onChange={(event) => {
+                void handleSelectChange(event.target.value)
+              }}
+              disabled={
+                minesLoading ||
+                mineOptions.length === 0 ||
+                checkingMineSwitch ||
+                blockingEmptyMine
+              }
               aria-label="Projects / Mines"
             >
               {minesLoading ? (
@@ -583,12 +666,13 @@ function ProjectDetailsContent() {
       minesLoading ||
       mineFunctionsLoading ||
       waitingForFunction ||
-      waitingForActiveFit ? (
+      waitingForActiveFit ||
+      blockingEmptyMine ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          {showFirstTimeModeGate
-            ? 'Choose a delivery mode for this cost function…'
-            : noFunctionsForMine
-              ? 'No cost functions for this mine. Select another project from the list.'
+          {blockingEmptyMine
+            ? 'This mine has no cost functions…'
+            : showFirstTimeModeGate
+              ? 'Choose a delivery mode for this cost function…'
               : waitingForFunction || mineFunctionsLoading
                 ? 'Select a cost function…'
                 : 'Loading…'}
@@ -663,7 +747,7 @@ function ProjectDetailsContent() {
       )}
 
       <DeliveryModeModal
-        open={showModeModal}
+        open={deliveryModeModalOpen}
         initialMode={deliveryMode}
         functionName={activeFunction?.function_name}
         dismissible={Boolean(deliveryMode)}
@@ -672,6 +756,23 @@ function ProjectDetailsContent() {
           void handleModalConfirm(mode)
         }}
       />
+
+      <Modal
+        open={showNoFunctionsModal}
+        title="No cost function"
+        onClose={dismissNoFunctionsModal}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button variant="primary" onClick={dismissNoFunctionsModal}>
+            OK
+          </Button>
+        }
+      >
+        <p className="text-sm text-portal-navy">
+          There is no cost function in the mine.
+        </p>
+      </Modal>
 
       <Modal
         open={showOutsourcingEditModal}
