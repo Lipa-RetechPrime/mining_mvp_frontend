@@ -481,14 +481,20 @@ function ProjectDetailsContent() {
     setShowModeModal(true)
   }
 
-  const showOutsourcingConfig =
+  /** First-time outsourcing setup replaces the page; edit opens a modal over tables. */
+  const showOutsourcingSetupPage =
     deliveryMode === 'outsourcing' &&
-    (forceOutsourcingConfig ||
-      (!partialSettingsLoading && !outsourcingPartial))
+    !partialSettingsLoading &&
+    !outsourcingPartial
+
+  const showOutsourcingEditModal =
+    deliveryMode === 'outsourcing' &&
+    forceOutsourcingConfig &&
+    Boolean(outsourcingPartial)
 
   const waitingForActiveFit =
     Boolean(deliveryMode) &&
-    !showOutsourcingConfig &&
+    !showOutsourcingSetupPage &&
     !activeFunctionInvestmentTypeId &&
     (deliveryMode === 'ownership' ||
       (deliveryMode === 'outsourcing' && !partialSettingsLoading))
@@ -496,6 +502,10 @@ function ProjectDetailsContent() {
   const waitingForFunction = !functionMasterId
   const noFunctionsForMine =
     !mineFunctionsLoading && mineFunctions.length === 0 && Boolean(activeMineId)
+
+  /** Block main content only before a first delivery-mode choice exists. */
+  const showFirstTimeModeGate =
+    showModeModal && !deliveryMode
 
   const functionOptions = useMemo(
     () =>
@@ -555,25 +565,27 @@ function ProjectDetailsContent() {
               size="sm"
               onClick={handleChangeMode}
               className="text-[--color-portal-purple] h-10"
+              title="Change ownership / outsourcing"
             >
               <MaterialIcon
                 name="settings"
                 size={18}
                 className="text-[--color-portal-purple]"
               />
+              <span className="hidden sm:inline">Delivery mode</span>
             </Button>
           ) : null}
         </div>
       </div>
 
       {!modeReady ||
-      showModeModal ||
+      showFirstTimeModeGate ||
       minesLoading ||
       mineFunctionsLoading ||
       waitingForFunction ||
       waitingForActiveFit ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          {showModeModal
+          {showFirstTimeModeGate
             ? 'Choose a delivery mode for this cost function…'
             : noFunctionsForMine
               ? 'No cost functions for this mine. Select another project from the list.'
@@ -585,7 +597,7 @@ function ProjectDetailsContent() {
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
           Loading outsourcing configuration…
         </div>
-      ) : deliveryMode === 'outsourcing' && showOutsourcingConfig ? (
+      ) : showOutsourcingSetupPage ? (
         <Suspense
           fallback={
             <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
@@ -654,8 +666,48 @@ function ProjectDetailsContent() {
         open={showModeModal}
         initialMode={deliveryMode}
         functionName={activeFunction?.function_name}
-        onConfirm={handleModalConfirm}
+        dismissible={Boolean(deliveryMode)}
+        onClose={() => setShowModeModal(false)}
+        onConfirm={(mode) => {
+          void handleModalConfirm(mode)
+        }}
       />
+
+      <Modal
+        open={showOutsourcingEditModal}
+        title="Edit outsourcing configuration"
+        size="xl"
+        onClose={() => setForceOutsourcingConfig(false)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-h-[90vh] overflow-y-auto"
+      >
+        <Suspense
+          fallback={
+            <p className="py-8 text-center text-sm text-gray-500">
+              Loading outsourcing…
+            </p>
+          }
+        >
+          <OutsourcingPlaceholder
+            projectId={activeMineId}
+            projectName={selectedMine?.mine_name || activeMineId}
+            phaseTypes={phaseTypes}
+            functionOptions={functionOptions}
+            initialSettings={outsourcingPartial}
+            onChangeMode={() => {
+              setForceOutsourcingConfig(false)
+              handleChangeMode()
+            }}
+            onCancel={() => setForceOutsourcingConfig(false)}
+            onContinueToEstimation={(kind, settings) => {
+              setPreferredOutsourcingKind(activeMineId, functionMasterId, kind)
+              setOutsourcingPartial(settings)
+              setPartialSettingsLoading(false)
+              setForceOutsourcingConfig(false)
+            }}
+          />
+        </Suspense>
+      </Modal>
 
       <Modal
         open={showUnsavedConfirm}

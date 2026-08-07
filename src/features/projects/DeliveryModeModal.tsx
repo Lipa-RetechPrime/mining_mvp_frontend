@@ -14,15 +14,23 @@ export interface DeliveryModeModalProps {
   /** Optional cost-function name shown in the title. */
   functionName?: string | null
   confirming?: boolean
+  /**
+   * When true (changing an existing mode), allow dismiss so tables stay usable.
+   * First-time choice stays required.
+   */
+  dismissible?: boolean
+  onClose?: () => void
   onConfirm: (mode: DeliveryModeCode) => void
 }
 
-/** Required choice modal — must pick Ownership or Outsourcing to continue. */
+/** Choice modal — Ownership or Outsourcing. */
 export function DeliveryModeModal({
   open,
   initialMode = null,
   functionName = null,
   confirming = false,
+  dismissible = false,
+  onClose,
   onConfirm,
 }: DeliveryModeModalProps) {
   const [selected, setSelected] = useState<DeliveryModeCode | null>(
@@ -53,16 +61,29 @@ export function DeliveryModeModal({
       open={open}
       title={title}
       size="sm"
-      dismissible={false}
+      dismissible={dismissible}
+      onClose={dismissible ? onClose : undefined}
       footer={
-        <Button
-          type="button"
-          variant="primary"
-          onClick={handleContinue}
-          disabled={confirming || !selected}
-        >
-          {confirming ? 'Continuing…' : 'Continue'}
-        </Button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {dismissible && onClose ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+              disabled={confirming}
+            >
+              Cancel
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="primary"
+            onClick={handleContinue}
+            disabled={confirming || !selected}
+          >
+            {confirming ? 'Continuing…' : 'Continue'}
+          </Button>
+        </div>
       }
     >
       <fieldset className="space-y-3">

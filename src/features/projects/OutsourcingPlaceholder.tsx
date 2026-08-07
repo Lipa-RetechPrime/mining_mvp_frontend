@@ -149,6 +149,7 @@ export function OutsourcingPlaceholder({
   /** Prefill from session/parent while API details reload (Edit config). */
   initialSettings = null,
   onChangeMode,
+  onCancel,
   onContinueToEstimation,
 }: {
   projectId: string
@@ -157,6 +158,8 @@ export function OutsourcingPlaceholder({
   functionOptions?: { id: string; name: string }[]
   initialSettings?: OutsourcingContributionSettings | null
   onChangeMode?: () => void
+  /** Optional dismiss when editing over the estimation tables. */
+  onCancel?: () => void
   /** After a valid save, hand settings to the parent so the cost-item form opens. */
   onContinueToEstimation?: (
     kind: OutsourcingContributionKind,
@@ -742,6 +745,16 @@ export function OutsourcingPlaceholder({
         {savedMessage ? (
           <p className="mr-auto text-sm text-emerald-700">{savedMessage}</p>
         ) : null}
+        {onCancel ? (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="primary"
@@ -750,7 +763,9 @@ export function OutsourcingPlaceholder({
         >
           {saving
             ? 'Saving…'
-            : 'Save & continue'}
+            : onCancel
+              ? 'Save'
+              : 'Save & continue'}
         </Button>
       </div>
     </div>
