@@ -1,4 +1,4 @@
-import { MONEY_SUM_EPSILON, phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calculations'
+import { phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calculations'
 import { formatAmount } from './formatAmount'
 import { DEFAULT_INITIAL_PHASE_COUNT } from '../phases/phaseTypes'
 import { isStepPopulated } from '../api/investments/domain'
@@ -17,9 +17,8 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
 }
 
 /**
- * Ownership (`strict`): filled phase values must sum to Amount.
- * Partial: at least one phase value required; sum of entered (pre-contribution%)
- *   phase values must not exceed Amount; under-Amount is allowed.
+ * Ownership (`strict`) and Partial: filled origin phase values must sum to Amount
+ * (Partial: before contribution%; contributor readout is display-only).
  * Full: no phase entry required.
  */
 export type PhaseValidationMode = 'strict' | 'partial' | 'full'
@@ -38,7 +37,7 @@ function resolvePhaseValidationMode(
   return 'strict'
 }
 
-/** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict). */
+/** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict / partial). */
 export function phaseAmountSumError(
   step: Step,
   mode: PhaseValidationMode = 'strict',
@@ -55,19 +54,7 @@ export function phaseAmountSumError(
     return 'Enter a value in at least one phase.'
   }
 
-  // Partial: sum of entered phase values (before contribution%) must not exceed Amount.
-  if (mode === 'partial') {
-    const amount = step.amount ?? 0
-    const sum = filled.reduce(
-      (acc, phase) => acc + resolvePhaseValue(phase, amount),
-      0,
-    )
-    if (sum > amount + MONEY_SUM_EPSILON) {
-      return `Phase values must not exceed Amount (${formatAmount(amount)}); current sum is ${formatAmount(sum)}`
-    }
-    return null
-  }
-
+  // Ownership + Partial: origin phase values (manual value or Amount × %) must equal Amount.
   if (phaseValuesSumToAmount(filled, step.amount ?? 0)) return null
   const sum = filled.reduce(
     (acc, phase) => acc + resolvePhaseValue(phase, step.amount ?? 0),

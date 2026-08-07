@@ -133,7 +133,7 @@ export function PhaseGrid({
           <h4 className="text-[15px] font-semibold text-[--color-portal-navy]">Phasing of Investment</h4>
           <p className="mt-1 text-sm font-normal text-[--text-color]">
             {isPartial
-              ? 'Enter phase values for the contributor share. Phase values do not need to sum to Amount — the remainder plus escalation is distributed on the Overall sheet.'
+              ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet.'
               : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
           </p>
           {sumError ? (

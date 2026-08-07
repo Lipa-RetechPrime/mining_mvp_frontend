@@ -25,12 +25,12 @@ import { CostItemsTable } from "./CostItemsTable";
 import { EmptyEstimationState } from "./EmptyEstimationState";
 import { EstimationBlockView } from "./EstimationBlockView";
 import {
-  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   OutsourcingPartialProvider,
   type OutsourcingContributionSettings,
 } from "@/features/projects/OutsourcingPartialContext";
+import { OutsourcingConfigBanner } from "@/features/projects/OutsourcingConfigBanner";
 import {
   isStepPopulated,
   scopeEstimationToInvestmentType,
@@ -403,53 +403,10 @@ export function EstimationScreen({
   return (
     <OutsourcingPartialProvider value={outsourcingPartial}>
       {outsourcingPartial && onEditOutsourcingConfig ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 text-sm">
-          <p className="text-gray-600">
-            {isFullOutsourcing(outsourcingPartial) ? (
-              <>
-                Full outsourcing — escalation{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.escalationPercent}%
-                </span>
-                , payback{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackPeriodYears} yr
-                </span>
-                , starting{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackStartPhase}
-                </span>
-                .
-              </>
-            ) : isAdhocOutsourcing(outsourcingPartial) ? (
-              <>Adhoc outsourcing — enter contribution amounts manually.</>
-            ) : isPartialOutsourcing(outsourcingPartial) ? (
-              <>
-                Partial outsourcing — contribution{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.contributionPercentage}%
-                </span>
-                , escalation{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.escalationPercent}%
-                </span>
-                , payback{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackPeriodYears} yr
-                </span>
-                .
-              </>
-            ) : null}
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onEditOutsourcingConfig}
-          >
-            Edit outsourcing config
-          </Button>
-        </div>
+        <OutsourcingConfigBanner
+          settings={outsourcingPartial}
+          onEdit={onEditOutsourcingConfig}
+        />
       ) : null}
       {loading && pageMode !== "form" ? (
         <div className="flex flex-col items-center justify-center py-32">
