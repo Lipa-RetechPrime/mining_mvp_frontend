@@ -15,6 +15,7 @@ import {
 import { isValid, validateStep } from '../utils/validation'
 import { useToast } from '../context/ToastContext'
 import {
+  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   useOutsourcingPartial,
@@ -95,7 +96,6 @@ export function CostItemsDraftForm({
   electrificationPercent,
   onSubmit,
   onCancel,
-  submitLabel = 'Submit',
 }: {
   phaseTypes: PhaseTypeMaster[]
   blockId: string
@@ -109,16 +109,17 @@ export function CostItemsDraftForm({
     electrificationPercent: number | null,
   ) => Promise<void> | void
   onCancel?: () => void
-  submitLabel?: string
 }) {
   void _phaseTypes
   const { success } = useToast()
   const outsourcing = useOutsourcingPartial()
   const phaseValidationMode = isFullOutsourcing(outsourcing)
     ? 'full'
-    : isPartialOutsourcing(outsourcing)
-      ? 'partial'
-      : 'strict'
+    : isAdhocOutsourcing(outsourcing)
+      ? 'adhoc'
+      : isPartialOutsourcing(outsourcing)
+        ? 'partial'
+        : 'strict'
   const [initialDraft] = useState(() => createExpandedDraft(minePhaseLimit))
   const [steps, setSteps] = useState<Step[]>([initialDraft.step])
   const [errors, setErrors] = useState<FieldErrors>({})
@@ -365,7 +366,7 @@ export function CostItemsDraftForm({
         stepCount={steps.length}
         showSubmit
         submitting={saving}
-        isEditing={submitLabel === 'Update'}
+        isEditing={false}
         onCancel={onCancel}
         onAddStep={() => {
           if (!saving) {

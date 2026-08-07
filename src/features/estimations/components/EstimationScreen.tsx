@@ -31,6 +31,7 @@ import {
   OutsourcingPartialProvider,
   type OutsourcingContributionSettings,
 } from "@/features/projects/OutsourcingPartialContext";
+import { OutsourcingConfigBanner } from "@/features/projects/OutsourcingConfigBanner";
 import {
   isStepPopulated,
   scopeEstimationToInvestmentType,
@@ -80,14 +81,18 @@ export function EstimationScreen({
   const { submit, submitting } = useSubmitEstimation({
     phaseValidationMode: isFullOutsourcing(outsourcingPartial)
       ? "full"
-      : isPartialOutsourcing(outsourcingPartial)
-        ? "partial"
-        : "strict",
+      : isAdhocOutsourcing(outsourcingPartial)
+        ? "adhoc"
+        : isPartialOutsourcing(outsourcingPartial)
+          ? "partial"
+          : "strict",
   });
   const { items, loading, refresh, replaceItem, open, remove } =
     useEstimationList();
 
   const [modeOverride, setModeOverride] = useState<PageMode | null>(null);
+  /** True only after user opens Edit — shows Update. First-time create keeps Submit. */
+  const [editingExisting, setEditingExisting] = useState(false);
   const openedMineIdRef = useRef<string | null>(null);
   const seededEmptyFunctionRef = useRef<string | null>(null);
   const [mineFunctions, setMineFunctions] = useState<MineFunction[]>([]);
@@ -104,10 +109,22 @@ export function EstimationScreen({
         name: fromApi.function_name,
       };
     }
+    // Prefer a known block name over a generic placeholder while the list resolves.
+    const fromBlock = estimation.blocks.find(
+      (block) => block.sectorId === activeSectorId,
+    );
+    const blockName = fromBlock?.sectorName?.trim() || "";
+    if (
+      activeSectorId &&
+      blockName &&
+      blockName.toLowerCase() !== "cost function"
+    ) {
+      return { id: activeSectorId, name: blockName };
+    }
     return activeSectorId
-      ? { id: activeSectorId, name: "Selected function" }
+      ? { id: activeSectorId, name: "" }
       : DEFAULT_SECTOR;
-  }, [mineFunctions, activeSectorId]);
+  }, [mineFunctions, activeSectorId, estimation.blocks]);
 
   async function reloadMineFunctions() {
     if (!mineId?.trim()) {
@@ -164,6 +181,7 @@ export function EstimationScreen({
       functionInvestmentTypeId,
       functionMasterId: activeSectorId || null,
       includeLegacyNullFit: !outsourcingPartial,
+      functionName: activeSector.name || null,
     })
   }, [
     mineId,
@@ -173,22 +191,30 @@ export function EstimationScreen({
     open,
     functionInvestmentTypeId,
     activeSectorId,
+    activeSector.name,
     outsourcingPartial,
   ])
 
   // Switching Cost Function or FIT recalculates form vs table.
   useEffect(() => {
     setModeOverride(null);
+    setEditingExisting(false);
     seededEmptyFunctionRef.current = null;
     openedMineIdRef.current = null;
   }, [activeSectorId, functionInvestmentTypeId]);
 
-  // Persist “has items” for the active function + FIT only.
+  // Persist “has items” for the active function + FIT on this mine only.
   const activeFunctionHasItems = useMemo(() => {
     if (!activeSectorId || !functionInvestmentTypeId) return false
+    const nameKey = (mineName || '').trim().toLowerCase()
     const mineItem =
       items.find((item) => item.id === mineId || item.mine_id === mineId) ??
-      items[0]
+      (nameKey
+        ? items.find(
+            (item) =>
+              (item.siteSubtitle || '').trim().toLowerCase() === nameKey,
+          )
+        : undefined)
     if (!mineItem) return false
     const scoped = scopeEstimationToInvestmentType(
       mineItem,
@@ -205,11 +231,25 @@ export function EstimationScreen({
   }, [
     items,
     mineId,
+    mineName,
     activeSectorId,
     activeSector.name,
     functionInvestmentTypeId,
     outsourcingPartial,
   ])
+
+  // Drop in-memory estimation when navigating to a different mine.
+  useEffect(() => {
+    if (!mineId?.trim()) return
+    const currentMine = estimation.mine_id || estimation.id
+    if (currentMine && currentMine !== mineId) {
+      dispatch({ type: 'SET_ESTIMATION', payload: EMPTY_ESTIMATION })
+      openedMineIdRef.current = null
+      seededEmptyFunctionRef.current = null
+      setModeOverride(null)
+      setEditingExisting(false)
+    }
+  }, [mineId, estimation.mine_id, estimation.id, dispatch])
 
   const pageMode: PageMode =
     modeOverride ??
@@ -232,9 +272,11 @@ export function EstimationScreen({
 
   const activeSectorIdRef = useRef(activeSectorId);
   activeSectorIdRef.current = activeSectorId;
+  const estimationRef = useRef(estimation);
+  estimationRef.current = estimation;
 
   // Empty cost function → ensure a create block exists for the active sector.
-  // Re-seed if open()/list hydration overwrote estimation with a different function.
+  // Preserve other functions’ blocks already in memory (do not wipe the mine).
   useEffect(() => {
     if (pageMode !== "form") return;
     if (!activeSector.id || loading) return;
@@ -244,13 +286,16 @@ export function EstimationScreen({
       return;
     }
 
-    const existingMineId = estimation.mine_id || mineId || undefined;
-    const siteSubtitle =
-      estimation.siteSubtitle || mineName || "Chuperbhita Simlong OCP";
-    const appendixLabel = estimation.appendixLabel || "APPENDIX A 2.2";
-    const phaseLimit = estimation.phaseLimit ?? null;
     const sectorId = activeSector.id;
     const sectorName = activeSector.name;
+    const seedKey = `${sectorId}:${functionInvestmentTypeId ?? ""}`;
+    if (seededEmptyFunctionRef.current === seedKey) return;
+
+    const current = estimationRef.current;
+    const existingMineId = current.mine_id || mineId || undefined;
+    const siteSubtitle = mineName || current.siteSubtitle || ''
+    const appendixLabel = current.appendixLabel || "APPENDIX A 2.2";
+    const phaseLimit = current.phaseLimit ?? null;
 
     void (async () => {
       const entities = await getEntities(sectorId);
@@ -263,10 +308,17 @@ export function EstimationScreen({
         entities,
       });
 
+      const emptyBlock = createEmptyEstimation(sectorId, sectorName, entities)
+        .blocks[0];
+      const latest = estimationRef.current;
+      const peerBlocks = latest.blocks.filter(
+        (block) => block.sectorId !== sectorId,
+      );
+
       dispatch({
         type: "SET_ESTIMATION",
         payload: {
-          ...createEmptyEstimation(sectorId, sectorName, entities),
+          ...latest,
           ...(existingMineId
             ? { id: existingMineId, mine_id: existingMineId }
             : {}),
@@ -274,12 +326,10 @@ export function EstimationScreen({
           siteSubtitle,
           appendixLabel,
           phaseLimit,
-          // New / empty function: never carry another function's design %.
-          electrificationPercentByEntity: {},
-          percentageMasterIdByEntity: {},
+          blocks: [...peerBlocks, emptyBlock],
         },
       });
-      seededEmptyFunctionRef.current = `${sectorId}:${functionInvestmentTypeId ?? ""}`;
+      seededEmptyFunctionRef.current = seedKey;
     })();
   }, [
     pageMode,
@@ -292,10 +342,6 @@ export function EstimationScreen({
     dispatch,
     mineId,
     mineName,
-    estimation.mine_id,
-    estimation.siteSubtitle,
-    estimation.appendixLabel,
-    estimation.phaseLimit,
     functionInvestmentTypeId,
   ]);
 
@@ -310,10 +356,11 @@ export function EstimationScreen({
           entities,
         ),
         ...(mineId ? { id: mineId, mine_id: mineId } : {}),
-        siteSubtitle: mineName || estimation.siteSubtitle || "Chuperbhita Simlong OCP",
+        siteSubtitle: mineName || estimation.siteSubtitle || '',
       },
     });
     seededEmptyFunctionRef.current = activeSector.id;
+    setEditingExisting(false);
     setModeOverride("form");
   }
 
@@ -332,10 +379,12 @@ export function EstimationScreen({
       includeLegacyNullFit: !outsourcingPartial,
       functionName: activeSector.name || null,
     })
+    setEditingExisting(true)
     setModeOverride("form")
   }
 
   function handleCancel() {
+    setEditingExisting(false);
     setModeOverride("table");
   }
 
@@ -345,6 +394,7 @@ export function EstimationScreen({
     await refresh();
     await reloadMineFunctions();
     seededEmptyFunctionRef.current = null;
+    setEditingExisting(false);
     setModeOverride("table");
   }
 
@@ -353,12 +403,15 @@ export function EstimationScreen({
     await reloadMineFunctions();
     if (items.length <= 1) {
       dispatch({ type: "SET_ESTIMATION", payload: EMPTY_ESTIMATION });
+      setEditingExisting(false);
       setModeOverride(null);
     }
   }
 
   const lastBlockId = sectorBlocks[sectorBlocks.length - 1]?.id;
-  const isEditing = Boolean(estimation.mine_id || estimation.id);
+  // Submit: first-time create (single/multiple new cost items).
+  // Update: only when returning via Edit after overall/table exists.
+  const isEditing = editingExisting;
   const showCancel =
     pageMode === "form" && (items.length > 0 || activeFunctionHasItems);
   const isWorkingOnForm = pageMode === "form" && sectorBlocks.length > 0;
@@ -372,53 +425,10 @@ export function EstimationScreen({
   return (
     <OutsourcingPartialProvider value={outsourcingPartial}>
       {outsourcingPartial && onEditOutsourcingConfig ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-4 py-2.5 text-sm">
-          <p className="text-gray-600">
-            {isFullOutsourcing(outsourcingPartial) ? (
-              <>
-                Full outsourcing — escalation{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.escalationPercent}%
-                </span>
-                , payback{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackPeriodYears} yr
-                </span>
-                , starting{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackStartPhase}
-                </span>
-                .
-              </>
-            ) : isAdhocOutsourcing(outsourcingPartial) ? (
-              <>Adhoc outsourcing — enter contribution amounts manually.</>
-            ) : isPartialOutsourcing(outsourcingPartial) ? (
-              <>
-                Partial outsourcing — contribution{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.contributionPercentage}%
-                </span>
-                , escalation{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.escalationPercent}%
-                </span>
-                , payback{" "}
-                <span className="font-medium text-portal-navy">
-                  {outsourcingPartial.paybackPeriodYears} yr
-                </span>
-                .
-              </>
-            ) : null}
-          </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onEditOutsourcingConfig}
-          >
-            Edit outsourcing config
-          </Button>
-        </div>
+        <OutsourcingConfigBanner
+          settings={outsourcingPartial}
+          onEdit={onEditOutsourcingConfig}
+        />
       ) : null}
       {loading && pageMode !== "form" ? (
         <div className="flex flex-col items-center justify-center py-32">
@@ -489,6 +499,8 @@ export function EstimationScreen({
         <CostItemsTable
           items={items}
           phaseTypes={phaseTypes}
+          mineId={mineId}
+          mineName={mineName}
           functionMasterId={activeSectorId || null}
           functionName={activeSector.name || null}
           functionInvestmentTypeId={functionInvestmentTypeId}
@@ -512,6 +524,7 @@ export function EstimationScreen({
             block={block}
             appendixLabel={estimation.appendixLabel}
             siteSubtitle={estimation.siteSubtitle}
+            sectorDisplayName={activeSector.name || null}
             showSubmit={block.id === lastBlockId}
             submitting={submitting}
             isEditing={isEditing}

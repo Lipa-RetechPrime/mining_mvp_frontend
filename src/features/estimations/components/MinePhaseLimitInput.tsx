@@ -43,7 +43,7 @@ export function MinePhaseLimitInput({
 
   return (
     <div className="mb-5 max-w-xs">
-      <Input
+      {/* <Input
         label="Life of mine (years)"
         type="number"
         min={DEFAULT_INITIAL_PHASE_COUNT}
@@ -60,7 +60,10 @@ export function MinePhaseLimitInput({
         {readOnly
           ? 'Set when the mine was created and cannot be changed.'
           : `Applies to every cost item. Use Add phases in each cost item to create up to ${PHASE_ADD_BATCH_SIZE} at a time (minimum ${DEFAULT_INITIAL_PHASE_COUNT}).`}
-      </p>
+      </p> */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium text-[--text-color]">Life of mine (years)</span>: {draft}
+      </div>
     </div>
   )
-}
+} 

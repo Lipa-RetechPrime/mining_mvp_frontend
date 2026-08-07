@@ -237,7 +237,12 @@ function EstimationTableCard({  estimation,
     scopedEstimation.blocks.find((candidate) => candidate.sectorId === functionMasterId) ??
     scopedEstimation.blocks[0]
   const displaySectorName =
-    functionName?.trim() || block?.sectorName || 'Cost function'
+    functionName?.trim() ||
+    (block?.sectorName?.trim() &&
+    block.sectorName.trim().toLowerCase() !== 'cost function'
+      ? block.sectorName.trim()
+      : '') ||
+    'Cost function'
   const tabs = block?.entityTabs ?? []
   const [activeEntityId, setActiveEntityId] = useState(() => OVERALL_TAB_ID)
   const [addingCostItems, setAddingCostItems] = useState(false)
@@ -488,7 +493,7 @@ function EstimationTableCard({  estimation,
               <MaterialIcon name="edit" size={14} />
               Edit
             </Button>
-            <Button
+            {/* <Button
               variant="outline"
               className="!px-2 !py-1.5 !text-xs text-white border-red-600 hover:text-red-700 bg-red-600 hover:bg-white hover:text-red-600 "
               onClick={() => setPendingDelete({ kind: 'table' })}
@@ -496,7 +501,7 @@ function EstimationTableCard({  estimation,
             >
               <MaterialIcon name="delete" size={14}/>
               Delete
-            </Button>
+            </Button> */}
           </>
         }
       />
@@ -574,7 +579,6 @@ function EstimationTableCard({  estimation,
                 electrificationPercent={
                   scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
                 }
-                submitLabel="Submit"
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
               />
@@ -592,7 +596,6 @@ function EstimationTableCard({  estimation,
           electrificationPercent={
             scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
           }
-          submitLabel="Submit"
           onSubmit={handleSaveSteps}
         />
       ) : null}
@@ -618,6 +621,8 @@ function EstimationTableCard({  estimation,
 export function CostItemsTable({
   items,
   phaseTypes,
+  mineId,
+  mineName,
   functionMasterId,
   functionName,
   functionInvestmentTypeId,
@@ -629,6 +634,9 @@ export function CostItemsTable({
 }: {
   items: Estimation[]
   phaseTypes: PhaseTypeMaster[]
+  /** When set, only this mine's estimation card is shown. */
+  mineId?: string | null
+  mineName?: string | null
   functionMasterId?: string | null
   functionName?: string | null
   functionInvestmentTypeId?: string | null
@@ -639,12 +647,24 @@ export function CostItemsTable({
   onItemUpdated: (estimation: Estimation) => void
 }) {
   const saved = items.filter((e) => Boolean(e.id))
+  const nameKey = (mineName || '').trim().toLowerCase()
+  const mineScoped = mineId?.trim()
+    ? saved.filter(
+        (e) =>
+          e.id === mineId ||
+          e.mine_id === mineId ||
+          (nameKey
+            ? (e.siteSubtitle || '').trim().toLowerCase() === nameKey
+            : false),
+      )
+    : saved
 
-  if (saved.length === 0) {
+  if (mineScoped.length === 0) {
     return (
       <div className="rounded-card bg-white px-6 py-10 text-center">
         <p className="text-sm text-gray-500">
-          No submitted cost items yet. Click &quot;+ Add New Cost Estimation&quot; to begin.
+          No submitted cost items yet for this mine. Click &quot;+ Add New Cost
+          Estimation&quot; to begin.
         </p>
       </div>
     )
@@ -652,7 +672,7 @@ export function CostItemsTable({
 
   return (
     <div>
-      {saved.map((estimation) => (
+      {mineScoped.map((estimation) => (
         <EstimationTableCard
           key={estimation.id}
           estimation={estimation}

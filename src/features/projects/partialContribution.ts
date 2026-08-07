@@ -49,6 +49,27 @@ export function collectFilledPhaseCodes(
 }
 
 /**
+ * Latest (highest catalog index) filled phase across many cost-item maps.
+ * Used so Partial payback for an entity starts after the top-most contributor phase.
+ */
+export function latestFilledPhaseAmong(
+  phaseValueMaps: Array<Record<string, number | null | undefined>>,
+): string | null {
+  let maxFilledIndex = -1
+  let latestCode: string | null = null
+  for (const phaseValues of phaseValueMaps) {
+    for (const code of collectFilledPhaseCodes(phaseValues)) {
+      const idx = phaseTypeIndex(code)
+      if (idx != null && idx > maxFilledIndex) {
+        maxFilledIndex = idx
+        latestCode = code
+      }
+    }
+  }
+  return latestCode
+}
+
+/**
  * Next `paybackN` catalog phases after the last filled phase.
  * Catalog order: C1, C2, P1… — same as ownership (life-of-mine still caps total).
  */

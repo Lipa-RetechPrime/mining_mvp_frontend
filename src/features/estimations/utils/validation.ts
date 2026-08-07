@@ -17,12 +17,12 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
 }
 
 /**
- * Ownership (`strict`): filled phase values must sum to Amount.
- * Partial: at least one phase value required; sum need not equal Amount
- *   (contributor share is below total; escalated remainder goes on Overall).
+ * Ownership (`strict`) and Partial: filled origin phase values must sum to Amount
+ * (Partial: before contribution%; contributor readout is display-only).
  * Full: no phase entry required.
+ * Adhoc: phases are manual only; values are not required to sum to Amount.
  */
-export type PhaseValidationMode = 'strict' | 'partial' | 'full'
+export type PhaseValidationMode = 'strict' | 'partial' | 'full' | 'adhoc'
 
 export type EstimationValidationOptions = {
   phaseValidationMode?: PhaseValidationMode
@@ -38,7 +38,7 @@ function resolvePhaseValidationMode(
   return 'strict'
 }
 
-/** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict). */
+/** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict / partial). */
 export function phaseAmountSumError(
   step: Step,
   mode: PhaseValidationMode = 'strict',
@@ -55,10 +55,10 @@ export function phaseAmountSumError(
     return 'Enter a value in at least one phase.'
   }
 
-  // Partial: contributor amounts are a share of phase values; they do not need to
-  // cover 100% of Amount (remainder is escalated on the Overall sheet).
-  if (mode === 'partial') return null
+  // Adhoc: enter phase values freely; do not require sum to Amount.
+  if (mode === 'adhoc') return null
 
+  // Ownership + Partial: origin phase values (manual value or Amount × %) must equal Amount.
   if (phaseValuesSumToAmount(filled, step.amount ?? 0)) return null
   const sum = filled.reduce(
     (acc, phase) => acc + resolvePhaseValue(phase, step.amount ?? 0),

@@ -121,10 +121,30 @@ export function useEstimationList(): UseEstimationListValue {
       if (index < 0) return [...prev, estimation];
       const next = [...prev];
       const existing = next[index];
+      // Saved responses are often scoped to one function — keep peer function blocks.
+      const incomingFunctionIds = new Set(
+        estimation.blocks.map((block) => block.sectorId).filter(Boolean),
+      );
+      const peerBlocks = existing.blocks.filter(
+        (block) => block.sectorId && !incomingFunctionIds.has(block.sectorId),
+      );
+      const merged: Estimation = {
+        ...existing,
+        ...estimation,
+        blocks: [...peerBlocks, ...estimation.blocks],
+        electrificationPercentByEntity: {
+          ...(existing.electrificationPercentByEntity ?? {}),
+          ...(estimation.electrificationPercentByEntity ?? {}),
+        },
+        percentageMasterIdByEntity: {
+          ...(existing.percentageMasterIdByEntity ?? {}),
+          ...(estimation.percentageMasterIdByEntity ?? {}),
+        },
+      };
       next[index] =
-        estimation.phaseLimit == null && existing.phaseLimit != null
-          ? withMinePhaseLimit(estimation, existing.phaseLimit)
-          : estimation;
+        merged.phaseLimit == null && existing.phaseLimit != null
+          ? withMinePhaseLimit(merged, existing.phaseLimit)
+          : merged;
       return next;
     });
   }, []);

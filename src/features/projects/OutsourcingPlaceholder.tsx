@@ -149,6 +149,7 @@ export function OutsourcingPlaceholder({
   /** Prefill from session/parent while API details reload (Edit config). */
   initialSettings = null,
   onChangeMode,
+  onCancel,
   onContinueToEstimation,
 }: {
   projectId: string
@@ -157,6 +158,8 @@ export function OutsourcingPlaceholder({
   functionOptions?: { id: string; name: string }[]
   initialSettings?: OutsourcingContributionSettings | null
   onChangeMode?: () => void
+  /** Optional dismiss when editing over the estimation tables. */
+  onCancel?: () => void
   /** After a valid save, hand settings to the parent so the cost-item form opens. */
   onContinueToEstimation?: (
     kind: OutsourcingContributionKind,
@@ -269,7 +272,7 @@ export function OutsourcingPlaceholder({
         const fullSettings = fitToFullSettings(fullFit)
         const partialSettings = fitToPartialSettings(partialFit)
         const preferred =
-          getPreferredOutsourcingKind(currentFunctionId) ??
+          getPreferredOutsourcingKind(projectId, currentFunctionId) ??
           (partialSettings
             ? 'partial'
             : fullSettings
@@ -419,7 +422,7 @@ export function OutsourcingPlaceholder({
         setPartialFitId(saved.function_investment_type_id)
         setPartialFitRecord(saved)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'partial')
+        setPreferredOutsourcingKind(projectId, functionId, 'partial')
         // Prefer API record; fall back to the form values we just saved so a
         // sparse create/update response cannot block opening the cost form.
         const fromApi = fitToPartialSettings(saved)
@@ -447,7 +450,7 @@ export function OutsourcingPlaceholder({
         setFullFitId(saved.function_investment_type_id)
         setFullFitRecord(saved)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'full')
+        setPreferredOutsourcingKind(projectId, functionId, 'full')
         const fromApi = fitToFullSettings(saved)
         const settings: OutsourcingContributionSettings = {
           kind: 'full',
@@ -465,7 +468,7 @@ export function OutsourcingPlaceholder({
         const saved = await ensureAdhocOutsourcingStub(functionId)
         setAdhocFitId(saved.function_investment_type_id)
         setFitId(saved.function_investment_type_id)
-        setPreferredOutsourcingKind(functionId, 'adhoc')
+        setPreferredOutsourcingKind(projectId, functionId, 'adhoc')
         onContinueToEstimation?.('adhoc', {
           kind: 'adhoc',
           functionInvestmentTypeId: saved.function_investment_type_id,
@@ -507,11 +510,11 @@ export function OutsourcingPlaceholder({
             .
           </p>
         </div>
-        {onChangeMode ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onChangeMode}>
+        {/* {onChangeMode ? (
+          <Button type="button" variant="outline" size="sm" onClick={onChangeMode}>
             Change delivery mode
           </Button>
-        ) : null}
+        ) : null} */}
       </div>
 
       {functionCatalog.length === 0 || !currentFunctionId ? (
@@ -742,6 +745,16 @@ export function OutsourcingPlaceholder({
         {savedMessage ? (
           <p className="mr-auto text-sm text-emerald-700">{savedMessage}</p>
         ) : null}
+        {onCancel ? (
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="primary"
@@ -750,7 +763,9 @@ export function OutsourcingPlaceholder({
         >
           {saving
             ? 'Saving…'
-            : 'Save & continue'}
+            : onCancel
+              ? 'Save'
+              : 'Save & continue'}
         </Button>
       </div>
     </div>

@@ -18,6 +18,7 @@ export const ENDPOINTS = {
     functionInvestmentTypeCreate: '/functions/investment-type/create',
     functionInvestmentTypeUpdate: '/functions/investment-type/update',
     functionInvestmentTypeDetails: '/functions/investment-type/details',
+    functionInvestmentTypeList: '/functions/investment-type-list',
   },
   /** Mine listing only — Manage Existing must use this, never `investments.list`. */
   mines: {

@@ -23,6 +23,8 @@ import {
   getFunctionInvestmentTypeDetails,
   persistDeliveryModeChoice,
   resolveDeliveryModeFromApi,
+  softFullFieldsFromFit,
+  softPartialFieldsFromFit,
 } from '@/features/estimations/api/functionInvestmentType'
 import {
   getPreferredOutsourcingKind,
@@ -46,6 +48,7 @@ function mineKey(mine: MineListItem): string {
 const EMPTY_PHASE_TYPES: PhaseTypeMaster[] = []
 
 async function loadOutsourcingSettings(
+  mineId: string,
   functionMasterId: string,
   preferredKind?: OutsourcingContributionKind | null,
 ): Promise<OutsourcingContributionSettings | null> {
@@ -55,7 +58,7 @@ async function loadOutsourcingSettings(
     getFunctionInvestmentTypeDetails(functionMasterId, 'adhoc-outsourcing'),
   ])
   const prefer =
-    preferredKind ?? getPreferredOutsourcingKind(functionMasterId)
+    preferredKind ?? getPreferredOutsourcingKind(mineId, functionMasterId)
 
   if (prefer === 'adhoc' && adhocFit) {
     return {
@@ -66,6 +69,8 @@ async function loadOutsourcingSettings(
 
   const partial = fitToPartialSettings(partialFit)
   const full = fitToFullSettings(fullFit)
+  const softPartial = softPartialFieldsFromFit(partialFit)
+  const softFull = softFullFieldsFromFit(fullFit)
 
   if (prefer === 'full' && full) {
     return {
@@ -83,6 +88,43 @@ async function loadOutsourcingSettings(
       escalationPercent: partial.escalationPercent,
       paybackPeriodYears: partial.paybackPeriodYears,
       functionInvestmentTypeId: partial.functionInvestmentTypeId,
+    }
+  }
+
+  // Soft fallthrough — still open estimation when FIT exists with complete-enough fields.
+  if (prefer === 'full' && softFull) {
+    if (
+      softFull.paybackPeriodYears != null &&
+      softFull.paybackPeriodYears > 0 &&
+      softFull.escalationPercent != null &&
+      softFull.escalationPercent >= 0 &&
+      softFull.paybackStartPhase
+    ) {
+      return {
+        kind: 'full',
+        escalationPercent: softFull.escalationPercent,
+        paybackPeriodYears: softFull.paybackPeriodYears,
+        paybackStartPhase: softFull.paybackStartPhase,
+        functionInvestmentTypeId: softFull.functionInvestmentTypeId,
+      }
+    }
+  }
+  if (prefer === 'partial' && softPartial) {
+    if (
+      softPartial.paybackPeriodYears != null &&
+      softPartial.paybackPeriodYears > 0 &&
+      softPartial.contributionPercentage != null &&
+      softPartial.contributionPercentage >= 0 &&
+      softPartial.escalationPercent != null &&
+      softPartial.escalationPercent >= 0
+    ) {
+      return {
+        kind: 'partial',
+        contributionPercentage: softPartial.contributionPercentage,
+        escalationPercent: softPartial.escalationPercent,
+        paybackPeriodYears: softPartial.paybackPeriodYears,
+        functionInvestmentTypeId: softPartial.functionInvestmentTypeId,
+      }
     }
   }
 
@@ -128,7 +170,11 @@ function ProjectDetailsContent() {
   const [phaseTypes, setPhaseTypes] =
     useState<PhaseTypeMaster[]>(EMPTY_PHASE_TYPES)
   const [mineFunctions, setMineFunctions] = useState<MineFunction[]>([])
-  const [mineFunctionsLoading, setMineFunctionsLoading] = useState(false)
+  const [mineFunctionsLoading, setMineFunctionsLoading] = useState(true)
+  /** Mine id whose function list fetch has completed (avoids false empty on mount). */
+  const [functionsFetchedForMine, setFunctionsFetchedForMine] = useState<
+    string | null
+  >(null)
   const [deliveryMode, setDeliveryMode] = useState<DeliveryModeCode | null>(
     null,
   )
@@ -141,6 +187,11 @@ function ProjectDetailsContent() {
     useState<OutsourcingContributionSettings | null>(null)
   const [ownershipFitId, setOwnershipFitId] = useState<string | null>(null)
   const [partialSettingsLoading, setPartialSettingsLoading] = useState(false)
+  const [showNoFunctionsModal, setShowNoFunctionsModal] = useState(false)
+  /** When true, closing the no-functions modal leaves mine details (deep link). */
+  const [leaveOnNoFunctionsDismiss, setLeaveOnNoFunctionsDismiss] =
+    useState(false)
+  const [checkingMineSwitch, setCheckingMineSwitch] = useState(false)
   const estimationDirtyRef = useRef(false)
 
   const sectorParam = searchParams.get('sector') || ''
@@ -195,9 +246,14 @@ function ProjectDetailsContent() {
     if (!activeMineId) {
       setMineFunctions([])
       setMineFunctionsLoading(false)
+      setFunctionsFetchedForMine(null)
       return
     }
     let cancelled = false
+    // Clear immediately so a previous mine's functions cannot open the
+    // delivery-mode modal while this mine's list is still loading.
+    setMineFunctions([])
+    setFunctionsFetchedForMine(null)
     setMineFunctionsLoading(true)
     void (async () => {
       try {
@@ -206,7 +262,10 @@ function ProjectDetailsContent() {
       } catch {
         if (!cancelled) setMineFunctions([])
       } finally {
-        if (!cancelled) setMineFunctionsLoading(false)
+        if (!cancelled) {
+          setMineFunctionsLoading(false)
+          setFunctionsFetchedForMine(activeMineId)
+        }
       }
     })()
     return () => {
@@ -270,10 +329,11 @@ function ProjectDetailsContent() {
   )
 
   // Delivery mode + outsourcing settings from FunctionInvestmentType API.
+  // Never prompt for delivery mode when this mine has no cost functions.
   useEffect(() => {
     if (!activeMineId || !functionMasterId) {
       setDeliveryMode(null)
-      setModeReady(false)
+      setModeReady(true)
       setShowModeModal(false)
       setForceOutsourcingConfig(false)
       setOutsourcingPartial(null)
@@ -286,16 +346,26 @@ function ProjectDetailsContent() {
     setModeReady(false)
     setPartialSettingsLoading(true)
     setForceOutsourcingConfig(false)
+    // Drop prior function's FIT/settings immediately so we never scope the
+    // new function with the previous function's outsourcing FIT id.
+    setOutsourcingPartial(null)
+    setOwnershipFitId(null)
 
     void (async () => {
       try {
-        const mode = await resolveDeliveryModeFromApi(functionMasterId)
+        const mode = await resolveDeliveryModeFromApi(
+          activeMineId,
+          functionMasterId,
+        )
         if (cancelled) return
         setDeliveryMode(mode)
         setShowModeModal(!mode)
 
         if (mode === 'outsourcing') {
-          const settings = await loadOutsourcingSettings(functionMasterId)
+          const settings = await loadOutsourcingSettings(
+            activeMineId,
+            functionMasterId,
+          )
           if (cancelled) return
           setOutsourcingPartial(settings)
           setOwnershipFitId(null)
@@ -347,7 +417,10 @@ function ProjectDetailsContent() {
     setPartialSettingsLoading(true)
     void (async () => {
       try {
-        const settings = await loadOutsourcingSettings(functionMasterId)
+        const settings = await loadOutsourcingSettings(
+          activeMineId,
+          functionMasterId,
+        )
         if (cancelled) return
         setOutsourcingPartial(settings)
       } catch {
@@ -361,6 +434,7 @@ function ProjectDetailsContent() {
     }
   }, [
     functionMasterId,
+    activeMineId,
     deliveryMode,
     forceOutsourcingConfig,
     outsourcingPartial,
@@ -376,15 +450,58 @@ function ProjectDetailsContent() {
     }
   }, [minesLoading, mineOptions, decodedId, router])
 
-  function handleSelectChange(newMineId: string) {
-    router.push(routes.projects.detail(newMineId))
+  // Deep link / refresh on a mine with no cost functions — cannot stay on details.
+  useEffect(() => {
+    if (minesLoading || !decodedId) return
+    if (functionsFetchedForMine !== decodedId) return
+    const mineInList = mineOptions.some((mine) => mineKey(mine) === decodedId)
+    if (!mineInList) return
+    if (mineFunctions.length > 0) return
+    setLeaveOnNoFunctionsDismiss(true)
+    setShowNoFunctionsModal(true)
+  }, [
+    minesLoading,
+    functionsFetchedForMine,
+    mineFunctions.length,
+    mineOptions,
+    decodedId,
+  ])
+
+  function dismissNoFunctionsModal() {
+    setShowNoFunctionsModal(false)
+    if (leaveOnNoFunctionsDismiss) {
+      setLeaveOnNoFunctionsDismiss(false)
+      router.replace(routes.projects.list)
+    }
+  }
+
+  async function handleSelectChange(newMineId: string) {
+    if (!newMineId || newMineId === activeMineId || checkingMineSwitch) return
+    setCheckingMineSwitch(true)
+    try {
+      const functions = await getMineWiseFunctionList(newMineId)
+      if (functions.length === 0) {
+        setLeaveOnNoFunctionsDismiss(false)
+        setShowNoFunctionsModal(true)
+        return
+      }
+      router.push(routes.projects.detail(newMineId))
+    } catch (err) {
+      window.alert(
+        err instanceof Error
+          ? err.message
+          : 'Failed to check cost functions for this mine.',
+      )
+    } finally {
+      setCheckingMineSwitch(false)
+    }
   }
 
   async function handleModalConfirm(mode: DeliveryModeCode) {
     if (!activeMineId || !functionMasterId) return
     try {
-      await persistDeliveryModeChoice(functionMasterId, mode)
-      setPreferredDeliveryMode(functionMasterId, mode)
+      await persistDeliveryModeChoice(activeMineId, functionMasterId, mode)
+      setPreferredDeliveryMode(activeMineId, functionMasterId, mode)
       setDeliveryMode(mode)
       setShowModeModal(false)
       setForceOutsourcingConfig(mode === 'outsourcing')
@@ -424,21 +541,47 @@ function ProjectDetailsContent() {
     setShowModeModal(true)
   }
 
-  const showOutsourcingConfig =
+  /** First-time outsourcing setup replaces the page; edit opens a modal over tables. */
+  const showOutsourcingSetupPage =
     deliveryMode === 'outsourcing' &&
-    (forceOutsourcingConfig ||
-      (!partialSettingsLoading && !outsourcingPartial))
+    !partialSettingsLoading &&
+    !outsourcingPartial
+
+  const showOutsourcingEditModal =
+    deliveryMode === 'outsourcing' &&
+    forceOutsourcingConfig &&
+    Boolean(outsourcingPartial)
 
   const waitingForActiveFit =
     Boolean(deliveryMode) &&
-    !showOutsourcingConfig &&
+    !showOutsourcingSetupPage &&
     !activeFunctionInvestmentTypeId &&
     (deliveryMode === 'ownership' ||
       (deliveryMode === 'outsourcing' && !partialSettingsLoading))
 
   const waitingForFunction = !functionMasterId
   const noFunctionsForMine =
-    !mineFunctionsLoading && mineFunctions.length === 0 && Boolean(activeMineId)
+    functionsFetchedForMine === activeMineId &&
+    mineFunctions.length === 0 &&
+    Boolean(activeMineId)
+  /** Landed on / cannot stay on an empty mine — wait for redirect via modal. */
+  const blockingEmptyMine =
+    leaveOnNoFunctionsDismiss ||
+    (noFunctionsForMine &&
+      mineOptions.some((mine) => mineKey(mine) === decodedId))
+
+  /** Block main content only before a first delivery-mode choice exists. */
+  const showFirstTimeModeGate =
+    showModeModal &&
+    !deliveryMode &&
+    Boolean(functionMasterId) &&
+    !blockingEmptyMine
+
+  const deliveryModeModalOpen =
+    showModeModal &&
+    Boolean(functionMasterId) &&
+    !noFunctionsForMine &&
+    !blockingEmptyMine
 
   const functionOptions = useMemo(
     () =>
@@ -457,8 +600,8 @@ function ProjectDetailsContent() {
             Mine Details
           </h1>
           <p className="mt-1 text-sm text-gray-600">
-            Switch project or mine. Ownership / Outsourcing is set per cost
-            function.
+            Select a project/mine. Ownership / Outsourcing is set per cost
+            function for the selected mine.
           </p>
         </div>
 
@@ -468,15 +611,23 @@ function ProjectDetailsContent() {
               Projects / Mines
             </span>
             <select
-              className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-portal-navy outline-none transition focus:border-portal-purple focus:ring-1 focus:ring-portal-purple/30"
-              value={selectedValue}
-              onChange={(event) => handleSelectChange(event.target.value)}
-              disabled={minesLoading}
+              className="h-10 rounded-md border border-gray-300 bg-white px-3 text-sm text-portal-navy outline-none transition focus:border-portal-purple focus:ring-1 focus:ring-portal-purple/30 disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-500"
+              value={mineOptions.length === 0 ? '' : selectedValue}
+              onChange={(event) => {
+                void handleSelectChange(event.target.value)
+              }}
+              disabled={
+                minesLoading ||
+                mineOptions.length === 0 ||
+                checkingMineSwitch ||
+                blockingEmptyMine
+              }
+              aria-label="Projects / Mines"
             >
-              {mineOptions.length === 0 ? (
-                <option value={decodedId}>
-                  {minesLoading ? 'Loading…' : decodedId || 'No mines'}
-                </option>
+              {minesLoading ? (
+                <option value="">Loading…</option>
+              ) : mineOptions.length === 0 ? (
+                <option value="">No mines available</option>
               ) : (
                 mineOptions.map((mine) => {
                   const lastUpdated = formatLastUpdated(mine.updatedAt)
@@ -497,28 +648,31 @@ function ProjectDetailsContent() {
               size="sm"
               onClick={handleChangeMode}
               className="text-[--color-portal-purple] h-10"
+              title="Change ownership / outsourcing"
             >
               <MaterialIcon
                 name="settings"
                 size={18}
                 className="text-[--color-portal-purple]"
               />
+              <span className="hidden sm:inline">Delivery mode</span>
             </Button>
           ) : null}
         </div>
       </div>
 
       {!modeReady ||
-      showModeModal ||
+      showFirstTimeModeGate ||
       minesLoading ||
       mineFunctionsLoading ||
       waitingForFunction ||
-      waitingForActiveFit ? (
+      waitingForActiveFit ||
+      blockingEmptyMine ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          {showModeModal
-            ? 'Choose a delivery mode for this cost function…'
-            : noFunctionsForMine
-              ? 'No cost functions for this mine. Select another project from the list.'
+          {blockingEmptyMine
+            ? 'This mine has no cost functions…'
+            : showFirstTimeModeGate
+              ? 'Choose a delivery mode for this cost function…'
               : waitingForFunction || mineFunctionsLoading
                 ? 'Select a cost function…'
                 : 'Loading…'}
@@ -527,7 +681,7 @@ function ProjectDetailsContent() {
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
           Loading outsourcing configuration…
         </div>
-      ) : deliveryMode === 'outsourcing' && showOutsourcingConfig ? (
+      ) : showOutsourcingSetupPage ? (
         <Suspense
           fallback={
             <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
@@ -543,7 +697,7 @@ function ProjectDetailsContent() {
             initialSettings={outsourcingPartial}
             onChangeMode={handleChangeMode}
             onContinueToEstimation={(kind, settings) => {
-              setPreferredOutsourcingKind(functionMasterId, kind)
+              setPreferredOutsourcingKind(activeMineId, functionMasterId, kind)
               setOutsourcingPartial(settings)
               setPartialSettingsLoading(false)
               setForceOutsourcingConfig(false)
@@ -593,11 +747,68 @@ function ProjectDetailsContent() {
       )}
 
       <DeliveryModeModal
-        open={showModeModal}
+        open={deliveryModeModalOpen}
         initialMode={deliveryMode}
         functionName={activeFunction?.function_name}
-        onConfirm={handleModalConfirm}
+        dismissible={Boolean(deliveryMode)}
+        onClose={() => setShowModeModal(false)}
+        onConfirm={(mode) => {
+          void handleModalConfirm(mode)
+        }}
       />
+
+      <Modal
+        open={showNoFunctionsModal}
+        title="No cost function"
+        onClose={dismissNoFunctionsModal}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button variant="primary" onClick={dismissNoFunctionsModal}>
+            OK
+          </Button>
+        }
+      >
+        <p className="text-sm text-portal-navy">
+          There is no cost function in the mine.
+        </p>
+      </Modal>
+
+      <Modal
+        open={showOutsourcingEditModal}
+        title="Edit outsourcing configuration"
+        size="xl"
+        onClose={() => setForceOutsourcingConfig(false)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-h-[90vh] overflow-y-auto"
+      >
+        <Suspense
+          fallback={
+            <p className="py-8 text-center text-sm text-gray-500">
+              Loading outsourcing…
+            </p>
+          }
+        >
+          <OutsourcingPlaceholder
+            projectId={activeMineId}
+            projectName={selectedMine?.mine_name || activeMineId}
+            phaseTypes={phaseTypes}
+            functionOptions={functionOptions}
+            initialSettings={outsourcingPartial}
+            onChangeMode={() => {
+              setForceOutsourcingConfig(false)
+              handleChangeMode()
+            }}
+            onCancel={() => setForceOutsourcingConfig(false)}
+            onContinueToEstimation={(kind, settings) => {
+              setPreferredOutsourcingKind(activeMineId, functionMasterId, kind)
+              setOutsourcingPartial(settings)
+              setPartialSettingsLoading(false)
+              setForceOutsourcingConfig(false)
+            }}
+          />
+        </Suspense>
+      </Modal>
 
       <Modal
         open={showUnsavedConfirm}

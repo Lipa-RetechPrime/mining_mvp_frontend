@@ -17,6 +17,8 @@ export type InvestmentCostItemDto = {
   name: string
   /** Cost function this item belongs to (when list returns multi-function mines). */
   function_master_id?: string | null
+  /** Display name for function_master_id (when list includes it per item). */
+  function_name?: string | null
   /** Ownership / Partial / Full FIT — isolates phase data per delivery type. */
   function_investment_type_id?: string | null
   inputs: InvestmentInputDto[]

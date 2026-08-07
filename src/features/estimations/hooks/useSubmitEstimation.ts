@@ -107,7 +107,27 @@ export function useSubmitEstimation(options?: {
             phaseValidationMode,
             skipPhaseAmountValidation: phaseValidationMode === "full",
           });
-      dispatch({ type: "SET_ESTIMATION", payload: saved });
+      // Keep peer cost-function blocks in memory (save responses are scoped).
+      const savedFunctionIds = new Set(
+        saved.blocks.map((block) => block.sectorId).filter(Boolean),
+      );
+      const peerBlocks = prepared.blocks.filter(
+        (block) => block.sectorId && !savedFunctionIds.has(block.sectorId),
+      );
+      const merged: Estimation = {
+        ...prepared,
+        ...saved,
+        blocks: [...peerBlocks, ...saved.blocks],
+        electrificationPercentByEntity: {
+          ...(prepared.electrificationPercentByEntity ?? {}),
+          ...(saved.electrificationPercentByEntity ?? {}),
+        },
+        percentageMasterIdByEntity: {
+          ...(prepared.percentageMasterIdByEntity ?? {}),
+          ...(saved.percentageMasterIdByEntity ?? {}),
+        },
+      };
+      dispatch({ type: "SET_ESTIMATION", payload: merged });
       dispatch({
         type: "SET_STATUS",
         status: "saved",
@@ -118,7 +138,7 @@ export function useSubmitEstimation(options?: {
       } else {
         success("Mine updated successfully");
       }
-      return saved;
+      return merged;
     } catch (err) {
       const message =
         err instanceof Error && err.message.trim()
