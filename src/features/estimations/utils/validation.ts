@@ -113,13 +113,25 @@ export function validateBlock(
   if (!block.activeEntityId && block.entityTabs.length > 0) {
     errors[`${block.id}.activeEntityId`] = 'Select an entity'
   }
-  const activeTab = block.entityTabs.find((t) => t.entityId === block.activeEntityId)
-  if (activeTab) {
-    if (activeTab.steps.length === 0) {
-      errors[`${block.id}.${activeTab.entityId}.steps`] = 'Add at least one step'
+  if (block.entityTabs.length === 0) return
+
+  // Validate every entity that has cost-item data — not only the active tab.
+  // Otherwise MDO phase / amount errors never reach the submit popup when ECL
+  // is active (or when activeEntityId is reset to ECL after id remapping).
+  const tabsToValidate = block.entityTabs.filter((tab) =>
+    tab.steps.some(isStepPopulated),
+  )
+  const targets =
+    tabsToValidate.length > 0
+      ? tabsToValidate
+      : block.entityTabs.filter((tab) => tab.entityId === block.activeEntityId)
+
+  for (const tab of targets) {
+    if (tab.steps.length === 0) {
+      errors[`${block.id}.${tab.entityId}.steps`] = 'Add at least one step'
     }
-    for (const step of activeTab.steps) {
-      validateStep(step, errors, block.id, activeTab.entityId, minePhaseLimit, options)
+    for (const step of tab.steps) {
+      validateStep(step, errors, block.id, tab.entityId, minePhaseLimit, options)
     }
   }
 }
@@ -141,18 +153,11 @@ export function validateEstimation(
   for (const block of estimation.blocks) {
     for (const tab of block.entityTabs) {
       if (!tab.steps.some(isStepPopulated)) continue
-      const percent =
-        percentByEntity[tab.entityId] ??
-        // Fallback if percent was stored under a sibling tab id for the same entity code
-        Object.entries(percentByEntity).find(([key]) => {
-          if (key === tab.entityId) return true
-          const sibling = block.entityTabs.find((t) => t.entityId === key)
-          return (
-            sibling != null &&
-            sibling.entityCode.trim().toLowerCase() ===
-              tab.entityCode.trim().toLowerCase()
-          )
-        })?.[1]
+      const percent = resolveElectrificationPercentForEntity(
+        percentByEntity,
+        tab,
+        block.entityTabs,
+      )
       if (percent == null || !Number.isFinite(percent) || percent < 0) {
         errors[`electrificationPercent.${tab.entityId}`] =
           `Design / electrification percent is required for ${tab.entityCode}`
@@ -167,6 +172,39 @@ export function validateEstimation(
     validateBlock(block, errors, estimation.phaseLimit, options)
   }
   return errors
+}
+
+/** Resolve design % by entity id, remapped uuid, or same entity code. */
+export function resolveElectrificationPercentForEntity(
+  percentByEntity: Record<string, number>,
+  tab: { entityId: string; entityCode: string },
+  siblings: Array<{ entityId: string; entityCode: string }> = [],
+): number | null {
+  const direct = percentByEntity[tab.entityId]
+  if (direct != null && Number.isFinite(direct) && direct >= 0) return direct
+
+  const code = tab.entityCode.trim().toLowerCase()
+  if (!code) return null
+
+  for (const [key, value] of Object.entries(percentByEntity)) {
+    if (value == null || !Number.isFinite(value) || value < 0) continue
+    if (key === tab.entityId) return value
+    const sibling = siblings.find((t) => t.entityId === key)
+    if (
+      sibling &&
+      sibling.entityCode.trim().toLowerCase() === code
+    ) {
+      return value
+    }
+  }
+
+  // Percent keyed under a legacy stub id (ecl/mdo) after the tab became a UUID.
+  for (const [key, value] of Object.entries(percentByEntity)) {
+    if (value == null || !Number.isFinite(value) || value < 0) continue
+    if (key.trim().toLowerCase() === code) return value
+  }
+
+  return null
 }
 
 export function isValid(errors: FieldErrors): boolean {

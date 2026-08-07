@@ -740,13 +740,29 @@ export function ensureEntityTabs(
       .sort((a, b) => compareEntityCodes(a.entityCode, b.entityCode))
 
     const mergedTabs = [...entityTabs, ...extras]
-    const activeStillValid = mergedTabs.some((tab) => tab.entityId === block.activeEntityId)
+    const activeById = mergedTabs.find(
+      (tab) => tab.entityId === block.activeEntityId,
+    )
+    // Keep ECL/MDO selection when stub ids (ecl/mdo) remap to API UUIDs —
+    // otherwise activeEntityId falls back to ECL and MDO validation is skipped.
+    const previousActive = block.entityTabs.find(
+      (tab) => tab.entityId === block.activeEntityId,
+    )
+    const activeByCode = previousActive
+      ? mergedTabs.find(
+          (tab) =>
+            tab.entityCode.trim().toLowerCase() ===
+            previousActive.entityCode.trim().toLowerCase(),
+        )
+      : undefined
     return {
       ...block,
       entityTabs: mergedTabs,
-      activeEntityId: activeStillValid
-        ? block.activeEntityId
-        : (mergedTabs[0]?.entityId ?? ''),
+      activeEntityId:
+        activeById?.entityId ??
+        activeByCode?.entityId ??
+        mergedTabs[0]?.entityId ??
+        '',
     }
   })
 

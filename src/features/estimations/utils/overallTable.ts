@@ -1,6 +1,7 @@
 import type { OverallCostItemDto, OverallEntityDto, OverallListData } from '../api/investments/types'
 import { compareEntityCodes } from '../constants/entityTabs'
 import { parsePhaseTypeCode } from '../phases/phaseTypes'
+import { resolvePhaseValue } from '../calculations/calculations'
 import {
   computeExternalAgentPayable,
   computeFullAgentPayable,
@@ -28,6 +29,12 @@ export type OverallTableRow = {
   unitCost?: number | null
   amount?: number | null
   phaseValues: Record<string, number | null>
+  /** Present on item rows when the source cost item id is known (entity table delete). */
+  costItemId?: string | null
+  /** Optional formula captions under phase values (e.g. Amount × 20%). */
+  phaseFormulas?: Record<string, string | null>
+  /** Optional formula caption under the Amount cell. */
+  amountFormula?: string | null
 }
 
 function sortPhaseColumns(columns: string[]): string[] {
@@ -136,6 +143,7 @@ function pushPaybackRow(
     details: payback.details,
     amount: payback.amount,
     phaseValues: paybackPhaseValues,
+    amountFormula: 'Escalated remainder',
   })
 }
 
@@ -308,6 +316,7 @@ function buildEntityRows(
       unitCost: item.unit_cost,
       amount: item.amount,
       phaseValues,
+      costItemId: item.cost_item_id ?? null,
     })
   })
 
@@ -315,8 +324,6 @@ function buildEntityRows(
   const phaseDesign = scalePhases(phaseSubtotals, factor)
   const phaseSectionTotal = scalePhases(phaseSubtotals, 1 + factor)
 
-  // const subtotalLabel = isLastEntity ? 'Total' : 'Sub-total'
-  // const sectionTotalLabel = isLastEntity ? 'Grand total' : 'Total Amount'
   const percentLabel = Number.isInteger(electrificationPercent)
     ? String(electrificationPercent)
     : electrificationPercent.toFixed(1)
@@ -486,16 +493,29 @@ export function withPartialPaybackOverlay(
   const nextRows: OverallTableRow[] = []
   rows.forEach((row, index) => {
     const phaseValues: Record<string, number | null> = {}
+    const phaseFormulas: Record<string, string | null> = {
+      ...(row.phaseFormulas ?? {}),
+    }
     for (const column of nextColumns) {
       const raw = row.phaseValues[column] ?? null
       if (rowKindShowsContributorShare(row.kind)) {
         phaseValues[column] =
           contributorPhaseAmount(raw, settings.contributionPercentage) ?? null
+        // Only annotate item cells — Sub-Total / Design / Total keep their own formulae.
+        if (
+          row.kind === 'item' &&
+          raw != null &&
+          Number.isFinite(raw) &&
+          raw !== 0
+        ) {
+          phaseFormulas[column] =
+            `Phase value × ${settings.contributionPercentage}%`
+        }
       } else {
         phaseValues[column] = raw
       }
     }
-    nextRows.push({ ...row, phaseValues })
+    nextRows.push({ ...row, phaseValues, phaseFormulas })
 
     const payback = paybackAfterItem.get(index)
     if (!payback) return
@@ -597,5 +617,111 @@ export function withFullPaybackOverlay(
     ),
     phaseColumns: nextColumns,
     electrificationPercent,
+  }
+}
+
+/**
+ * Build Overall-sheet shaped data for a single entity tab so ECL/MDO tables
+ * use the same Sub-Total / Design / Total Amount layout as Overall.
+ */
+export function buildEntityOverallListData(params: {
+  steps: Array<{
+    id: string
+    details: string
+    manpower: number | null
+    qrts: number | null
+    unitCost: number | null
+    amount: number | null
+    phases: Array<{
+      phaseType: string
+      calculationMode: 'manual' | 'automatic'
+      value: number | null
+      percentage: number | null
+    }>
+  }>
+  entityCode: string
+  entityId: string
+  electrificationPercent: number | null
+  functionName: string
+  mineId: string
+  mineName: string
+}): OverallListData {
+  const costItems: OverallCostItemDto[] = params.steps.map((step) => {
+    const amount = step.amount ?? 0
+    const phases: Record<string, number> = {}
+    for (const phase of step.phases) {
+      if (!phase.phaseType) continue
+      phases[phase.phaseType] = resolvePhaseValue(phase, amount)
+    }
+    return {
+      name: step.details?.trim() || 'Untitled Cost Item',
+      manpower: step.manpower ?? 0,
+      qrts: step.qrts ?? 0,
+      unit_cost: step.unitCost ?? 0,
+      amount,
+      phases,
+      cost_item_id: step.id,
+    }
+  })
+
+  const total_manpower = costItems.reduce((sum, item) => sum + (item.manpower ?? 0), 0)
+  const total_qrts = costItems.reduce((sum, item) => sum + (item.qrts ?? 0), 0)
+  const total_amount = costItems.reduce((sum, item) => sum + (item.amount ?? 0), 0)
+  const pct =
+    params.electrificationPercent != null &&
+    Number.isFinite(params.electrificationPercent) &&
+    params.electrificationPercent >= 0
+      ? params.electrificationPercent
+      : 0
+  const design_amount = total_amount * (pct / 100)
+  const grand_total = total_amount + design_amount
+
+  const draftForColumns: OverallListData = {
+    mine_id: params.mineId,
+    mine_name: params.mineName,
+    function_name: params.functionName,
+    entities: [
+      {
+        entity_name: params.entityCode,
+        total_manpower,
+        total_qrts,
+        total_amount,
+        grand_total,
+        costItems,
+        phases: [],
+      },
+    ],
+    overall_grand_total: grand_total,
+    overall_phase_totals: [],
+  }
+  const phaseColumns = collectOverallPhaseColumns(draftForColumns)
+  const phaseTotals = sumItemPhases(costItems, phaseColumns)
+  const entityPhases = phaseColumns.map((phase_name) => ({
+    phase_name,
+    total_value: phaseTotals[phase_name] ?? 0,
+  }))
+
+  return {
+    mine_id: params.mineId,
+    mine_name: params.mineName,
+    function_name: params.functionName,
+    electrification_percent: params.electrificationPercent,
+    entities: [
+      {
+        entity_id: params.entityId,
+        entity_name: params.entityCode,
+        total_manpower,
+        total_qrts,
+        total_amount,
+        design_percent: design_amount,
+        design_amount,
+        grand_total,
+        percentage: params.electrificationPercent,
+        phases: entityPhases,
+        costItems,
+      },
+    ],
+    overall_grand_total: grand_total,
+    overall_phase_totals: entityPhases,
   }
 }

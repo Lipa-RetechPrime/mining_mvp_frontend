@@ -1,4 +1,6 @@
 import { useMemo } from 'react'
+import { Button } from '@/shared/components/ui/Button'
+import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import {
   buildOverallTableRows,
   withFullPaybackOverlay,
@@ -33,16 +35,35 @@ function rowClassName(
   }
 }
 
+function FormulaCaption({ text }: { text?: string | null }) {
+  if (!text?.trim()) return null
+  return (
+    <span className="mt-0.5 block max-w-[9rem] text-[10px] font-normal leading-tight text-gray-500 normal-case tracking-normal">
+      {text}
+    </span>
+  )
+}
+
 /** Read-only overall sheet — electrification % is edited only on create/update mine forms. */
 export function OverallCostTable({
   data,
   phaseLimit,
+  onRequestDelete,
+  showFormulas = false,
 }: {
   data: OverallListData
   /** Mine life-of-mine cap; payback distribution must not exceed this. */
   phaseLimit?: number | null
+  /** When set, shows an Actions column with delete on cost-item rows (entity tabs). */
+  onRequestDelete?: (costItemId: string) => void
+  /**
+   * Entity tabs only: show “Phase value × contributor %” and
+   * “Escalated remainder”. Overall tab keeps this off.
+   */
+  showFormulas?: boolean
 }) {
   const outsourcing = useOutsourcingPartial()
+  const showActions = typeof onRequestDelete === 'function'
   const { rows, phaseColumns } = useMemo(() => {
     const built = buildOverallTableRows(data)
     if (isFullOutsourcing(outsourcing)) {
@@ -98,6 +119,9 @@ export function OverallCostTable({
                 Phasing of investment
               </th>
             ) : null}
+            {showActions ? (
+              <th className="border border-portal-border px-3 py-2 text-right text-xs">Actions</th>
+            ) : null}
           </tr>
           {phaseColumns.length > 0 ? (
             <tr className="border-b border-portal-border bg-gray-50/80 font-semibold uppercase tracking-wide text-[--text-color]">
@@ -110,6 +134,9 @@ export function OverallCostTable({
                   {phaseType}
                 </th>
               ))}
+              {showActions ? (
+                <th className="border border-portal-border px-2 py-1.5" />
+              ) : null}
             </tr>
           ) : null}
         </thead>
@@ -141,16 +168,54 @@ export function OverallCostTable({
                 {row.kind === 'item' ? formatNum(row.unitCost) : ''}
               </td>
               <td className="border border-portal-border px-3 py-2 text-right tabular-nums font-medium text-[--color-portal-navy]">
-                {row.amount != null ? formatNum(row.amount) : ''}
+                {row.amount != null ? (
+                  showFormulas && row.amountFormula ? (
+                    <div className="flex flex-col items-end">
+                      <span>{formatNum(row.amount)}</span>
+                      <FormulaCaption text={row.amountFormula} />
+                    </div>
+                  ) : (
+                    formatNum(row.amount)
+                  )
+                ) : (
+                  ''
+                )}
               </td>
-              {phaseColumns.map((phaseType) => (
-                <td
-                  key={phaseType}
-                  className="border border-portal-border px-3 py-2 text-right tabular-nums text-gray-700"
-                >
-                  {formatNum(row.phaseValues[phaseType])}
+              {phaseColumns.map((phaseType) => {
+                const value = row.phaseValues[phaseType]
+                const formula = showFormulas
+                  ? row.phaseFormulas?.[phaseType]
+                  : null
+                return (
+                  <td
+                    key={phaseType}
+                    className="border border-portal-border px-3 py-2 text-right tabular-nums text-gray-700"
+                  >
+                    {showFormulas && formula ? (
+                      <div className="flex flex-col items-end">
+                        <span>{formatNum(value)}</span>
+                        <FormulaCaption text={formula} />
+                      </div>
+                    ) : (
+                      formatNum(value)
+                    )}
+                  </td>
+                )
+              })}
+              {showActions ? (
+                <td className="border border-portal-border px-3 py-2 text-right">
+                  {row.kind === 'item' && row.costItemId ? (
+                    <Button
+                      variant="ghost"
+                      className="!px-2 !py-1.5 !text-xs text-red-600 hover:bg-red-50 hover:text-red-700"
+                      onClick={() => onRequestDelete?.(row.costItemId!)}
+                      aria-label={`Delete cost item ${row.details}`}
+                    >
+                      <MaterialIcon name="delete" size={14} />
+                    </Button>
+                  ) : null}
                 </td>
-              ))}
+              ) : null}
             </tr>
           ))}
         </tbody>

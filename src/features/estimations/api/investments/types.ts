@@ -91,6 +91,8 @@ export type OverallCostItemDto = {
   unit_cost: number
   amount: number
   phases: Record<string, number>
+  /** Optional phase-cell formula labels (e.g. Amount × 20%). */
+  phase_formulas?: Record<string, string>
   /** Present when overall list returns FIT-scoped or mixed rows. */
   function_investment_type_id?: string | null
   cost_item_id?: string | null

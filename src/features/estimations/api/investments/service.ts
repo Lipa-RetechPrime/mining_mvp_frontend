@@ -189,8 +189,21 @@ function assertEstimationValidForSave(
 ): void {
   const errors = validateEstimation(estimation, options)
   if (isValid(errors)) return
-  const messages = Object.values(errors)
-  throw new Error(messages[0] ?? 'Validation failed')
+  const sumMessages = Object.entries(errors)
+    .filter(
+      ([key]) =>
+        key.endsWith('.phaseAmountSum') || key === 'phaseAmountSum',
+    )
+    .map(([, message]) => message)
+  const percentMessages = Object.entries(errors)
+    .filter(([key]) => key.startsWith('electrificationPercent.'))
+    .map(([, message]) => message)
+  const messages = [...percentMessages, ...sumMessages]
+  throw new Error(
+    messages.length > 0
+      ? messages.join('\n')
+      : (Object.values(errors)[0] ?? 'Validation failed'),
+  )
 }
 
 function isInvestmentsListUnavailable(error: unknown): boolean {
@@ -458,12 +471,24 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
       }
     })
     const activeStillValid = entityTabs.some((tab) => tab.entityId === block.activeEntityId)
+    const previousActive = block.entityTabs.find(
+      (tab) => tab.entityId === block.activeEntityId,
+    )
+    const activeByCode = previousActive
+      ? entityTabs.find(
+          (tab) =>
+            tab.entityCode.trim().toLowerCase() ===
+            previousActive.entityCode.trim().toLowerCase(),
+        )
+      : undefined
     return {
       ...block,
       entityTabs,
       activeEntityId: activeStillValid
         ? block.activeEntityId
-        : (entityTabs.find((tab) => isUuid(tab.entityId))?.entityId ?? block.activeEntityId),
+        : (activeByCode?.entityId ??
+          entityTabs.find((tab) => isUuid(tab.entityId))?.entityId ??
+          block.activeEntityId),
     }
   })
 
@@ -599,12 +624,24 @@ export async function addCostItemsToEstimation(
   steps: Step[],
   currentEstimation?: Estimation,
   electrificationPercent?: number | null,
+  /** Function-scoped FIT — same Ownership/Outsourcing for every entity under the function. */
+  functionInvestmentTypeId?: string | null,
 ): Promise<Estimation> {
   const current =
     currentEstimation &&
     (currentEstimation.id === estimationId || currentEstimation.mine_id === estimationId)
       ? currentEstimation
       : await getEstimation(estimationId)
+
+  const fitId =
+    functionInvestmentTypeId?.trim() ||
+    current.functionInvestmentTypeId?.trim() ||
+    null
+  if (!fitId) {
+    throw new Error(
+      'Select Ownership or save Outsourcing configuration before saving cost items.',
+    )
+  }
 
   const populatedSteps = steps.filter(isStepPopulated)
   if (populatedSteps.length > 0) {
@@ -620,9 +657,10 @@ export async function addCostItemsToEstimation(
     }
   }
 
-  let next = populatedSteps.reduce(
+  let next: Estimation = { ...current, functionInvestmentTypeId: fitId }
+  next = populatedSteps.reduce(
     (acc, step) => appendCostItem(acc, entityId, step),
-    current,
+    next,
   )
 
   const masters = await getEntities(next.blocks[0]?.sectorId || 'residential-buildings')
@@ -633,11 +671,14 @@ export async function addCostItemsToEstimation(
     const percentKey = targetTab?.entityId ?? entityId
     next = {
       ...next,
+      functionInvestmentTypeId: fitId,
       electrificationPercentByEntity: {
         ...(next.electrificationPercentByEntity ?? {}),
         [percentKey]: electrificationPercent as number,
       },
     }
+  } else {
+    next = { ...next, functionInvestmentTypeId: fitId }
   }
 
   return updateEstimation(estimationId, next)

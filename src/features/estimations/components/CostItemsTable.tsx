@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/shared/components/ui/Button'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
+import { Modal } from '@/shared/components/ui/Modal'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { EntityTabs } from './EntityTabs'
 import { EstimationBlockHeader } from './EstimationBlockHeader'
@@ -18,177 +19,13 @@ import {
 } from '../api/investments'
 import { asUuidOrNull } from '../api/investments/domain'
 import type { OverallListData } from '../api/investments/types'
-import type { Estimation, Phase, PhaseTypeMaster, Step } from '../types/estimation'
-import { formatAmount } from '../utils/formatAmount'
+import type { Estimation, PhaseTypeMaster, Step } from '../types/estimation'
+import { buildEntityOverallListData } from '../utils/overallTable'
+import { resolveElectrificationPercentForEntity } from '../utils/validation'
 
 type PendingDelete =
   | { kind: 'row'; step: Step }
   | { kind: 'table' }
-
-export type CostItemRow = {
-  estimationId: string
-  entityCode: string
-  stepId: string
-  details: string
-  manpower: number | null
-  qrts: number | null
-  unitCost: number | null
-  amount: number | null
-  phases: Phase[]
-}
-
-function formatNum(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '—'
-  return formatAmount(value)
-}
-
-function formatPercent(value: number): string {
-  // Drop trailing zeros for cleaner table cells (20, 33.5, 55.5556).
-  const rounded = Math.round(value * 1e4) / 1e4
-  return `${rounded}%`
-}
-
-function formatPhaseCell(phases: Phase[], phaseType: string, amount: number): string {
-  const match = phases.find((p) => p.phaseType === phaseType)
-  if (!match) return '—'
-
-  if (match.calculationMode === 'automatic') {
-    let percentage = match.percentage
-    if (percentage == null && match.value != null && amount > 0) {
-      percentage = Math.round((match.value / amount) * 1e6) / 1e4
-    }
-    const valueText = formatNum(match.value)
-    if (percentage == null) return valueText
-    return `${valueText} (${formatPercent(percentage)})`
-  }
-
-  return formatNum(match.value)
-}
-
-/** Unique phase types used by steps in an entity tab, in first-seen order. */
-export function collectPhaseColumns(steps: Step[]): string[] {
-  const seen = new Set<string>()
-  const columns: string[] = []
-  for (const step of steps) {
-    for (const phase of step.phases) {
-      if (!phase.phaseType || seen.has(phase.phaseType)) continue
-      seen.add(phase.phaseType)
-      columns.push(phase.phaseType)
-    }
-  }
-  return columns
-}
-
-export function flattenCostItems(estimations: Estimation[]): CostItemRow[] {
-  const rows: CostItemRow[] = []
-  for (const estimation of estimations) {
-    if (!estimation.id) continue
-    for (const block of estimation.blocks) {
-      for (const tab of block.entityTabs) {
-        for (const step of tab.steps.filter(isStepPopulated)) {
-          rows.push({
-            estimationId: estimation.id,
-            entityCode: tab.entityCode,
-            stepId: step.id,
-            details: step.details?.trim() || 'Untitled Cost Item',
-            manpower: step.manpower,
-            qrts: step.qrts,
-            unitCost: step.unitCost,
-            amount: step.amount,
-            phases: step.phases,
-          })
-        }
-      }
-    }
-  }
-  return rows
-}
-
-function EntityCostTable({
-  steps,
-  onRequestDelete,
-}: {
-  steps: Step[]
-  onRequestDelete: (step: Step) => void
-}) {
-  const phaseColumns = collectPhaseColumns(steps)
-
-  return (
-    <div className="overflow-x-auto rounded-lg border border-portal-border">
-      <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-        <thead>
-          <tr className="border-b border-portal-border bg-gray-50/80 text-2xs font-semibold uppercase tracking-wide text-[--text-color]">
-            <th className="px-4 border border-portal-border py-3 sm:px-5 text-xs">Cost Item</th>
-            <th className="px-3 border border-portal-border py-3 text-right text-xs">Manpower</th>
-            <th className="px-3 border border-portal-border py-3 text-right text-xs">Qrts</th>
-            <th className="px-3 border border-portal-border py-3 text-right text-xs">Unit Cost</th>
-            <th className="px-3 border border-portal-border py-3 text-right text-xs">Amount</th>
-            {phaseColumns.map((phaseType) => (
-              <th key={phaseType} className="px-3 border border-portal-border py-3 text-right text-xs">
-                {phaseType}
-              </th>
-            ))}
-            <th className="px-4 border border-portal-border py-3 text-right sm:px-5 text-xs">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {steps.map((step) => {
-            const details = step.details?.trim() || 'Untitled Cost Item'
-            return (
-              <tr key={step.id} className="hover:bg-gray-50/60">
-                <td className="max-w-[220px] truncate px-4 border border-portal-border py-3 font-medium text-[--color-portal-navy] sm:px-5">
-                  {details}
-                </td>
-                <td className="px-3 border border-portal-border py-3 text-right tabular-nums text-gray-700">
-                  {formatNum(step.manpower)}
-                </td>
-                <td className="px-3 border border-portal-border py-3 text-right tabular-nums text-gray-700">
-                  {formatNum(step.qrts)}
-                </td>
-                <td className="px-3 border border-portal-border py-3 text-right tabular-nums text-gray-700">
-                  <div className="flex flex-col items-end gap-0.5">
-                    <span>{formatNum(step.unitCost)}</span>
-                    {/* <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                      {step.unitCostMode === 'on_hire' ? 'On hire' : 'Manual'}
-                    </span> */}
-                  </div>
-                </td>
-                <td className="px-3 border border-portal-border py-3 text-right tabular-nums font-medium text-[--color-portal-navy]">
-                  <div className="flex flex-col items-end gap-0.5">
-                    <span>{formatAmount(step.amount)}</span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
-                      {step.amountMode === 'manual' ? 'Manual' : 'Calculated'}
-                    </span>
-                  </div>
-                </td>
-                {phaseColumns.map((phaseType) => (
-                  <td
-                    key={phaseType}
-                    className="px-3 border border-portal-border py-3 text-right tabular-nums text-gray-700"
-                  >
-                    {formatPhaseCell(step.phases, phaseType, step?.amount ?? 0)}
-                  </td>
-                ))}
-                <td className="px-4 border border-portal-border py-3 sm:px-5">
-                  <div className="flex items-center justify-end">
-                    <Button
-                      variant="ghost"
-                      className="!px-2 !py-1.5 !text-xs text-red-600 hover:bg-red-50 hover:text-red-700"
-                      onClick={() => onRequestDelete(step)}
-                      aria-label={`Delete cost item ${details}`}
-                    >
-                      <MaterialIcon name="delete" size={14} />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
-  )
-}
 
 
 function EstimationTableCard({  estimation,
@@ -262,6 +99,33 @@ function EstimationTableCard({  estimation,
     { id: OVERALL_TAB_ID, code: OVERALL_TAB_CODE },
     ...tabs.map((t) => ({ id: t.entityId, code: t.entityCode })),
   ]
+
+  const entityOverallData = useMemo(() => {
+    if (isOverallTab || !activeTab || populatedSteps.length === 0) return null
+    return buildEntityOverallListData({
+      steps: populatedSteps,
+      entityCode: activeTab.entityCode,
+      entityId: activeTab.entityId,
+      electrificationPercent: resolveElectrificationPercentForEntity(
+        scopedEstimation.electrificationPercentByEntity ?? {},
+        activeTab,
+        tabs,
+      ),
+      functionName: displaySectorName,
+      mineId: estimation.mine_id || estimation.id || '',
+      mineName: estimation.siteSubtitle || '',
+    })
+  }, [
+    isOverallTab,
+    activeTab,
+    populatedSteps,
+    scopedEstimation.electrificationPercentByEntity,
+    tabs,
+    displaySectorName,
+    estimation.mine_id,
+    estimation.id,
+    estimation.siteSubtitle,
+  ])
 
   const loadOverall = useCallback(async () => {
     if (!estimation.mine_id || !functionMasterId) {
@@ -353,15 +217,37 @@ function EstimationTableCard({  estimation,
   async function handleSaveSteps(steps: Step[], electrificationPercent: number | null) {
     if (!estimation.id || !activeTab) return
     setSaveError(null)
+    // Delivery mode / FIT is per cost function (shared by ECL and MDO), not per entity.
+    const fitId =
+      functionInvestmentTypeId?.trim() ||
+      scopedEstimation.functionInvestmentTypeId?.trim() ||
+      null
+    if (!fitId) {
+      setSaveError(
+        'Select Ownership or save Outsourcing configuration before saving cost items.',
+      )
+      throw new Error('save failed')
+    }
     try {
+      const baseForSave: Estimation = {
+        ...scopedEstimation,
+        id: estimation.id,
+        mine_id: estimation.mine_id || estimation.id,
+        functionInvestmentTypeId: fitId,
+      }
       const updated = await addCostItemsToEstimation(
         estimation.id,
         activeTab.entityId,
         steps,
-        estimation,
+        baseForSave,
         electrificationPercent,
+        fitId,
       )
-      onItemUpdated(updated)
+      onItemUpdated({
+        ...updated,
+        functionInvestmentTypeId:
+          updated.functionInvestmentTypeId?.trim() || fitId,
+      })
       setAddingCostItems(false)
       await onChanged()
       if (isOverallTab) await loadOverall()
@@ -465,16 +351,18 @@ function EstimationTableCard({  estimation,
         }}
         actions={
           <>
-          <Button
-            variant="secondary"
-            className="!px-3 !py-1.5 !text-xs"
-            onClick={() => void handleDownloadExcel()}
-            disabled={downloading || !estimation.mine_id}
-          >
-            <MaterialIcon name="download" size={14} />
-            {downloading ? 'Downloading…' : 'Download'}
-          </Button>
-            <Button
+            {isOverallTab ? (
+              <>
+              <Button
+                variant="secondary"
+                className="!px-3 !py-1.5 !text-xs"
+                onClick={() => void handleDownloadExcel()}
+                disabled={downloading || !estimation.mine_id}
+              >
+                <MaterialIcon name="download" size={14} />
+                {downloading ? 'Downloading…' : 'Download'}
+              </Button>
+              <Button
               variant="secondary"
               className="!px-3 !py-1.5 !text-xs"
               onClick={() => {
@@ -493,6 +381,9 @@ function EstimationTableCard({  estimation,
               <MaterialIcon name="edit" size={14} />
               Edit
             </Button>
+              </>
+            ) : null}
+            
             {/* <Button
               variant="outline"
               className="!px-2 !py-1.5 !text-xs text-white border-red-600 hover:text-red-700 bg-red-600 hover:bg-white hover:text-red-600 "
@@ -546,11 +437,16 @@ function EstimationTableCard({  estimation,
             No overall data available for this estimation.
           </div>
         )
-      ) : activeTab && hasData ? (
+      ) : activeTab && hasData && entityOverallData ? (
         <>
-          <EntityCostTable
-            steps={populatedSteps}
-            onRequestDelete={(step) => setPendingDelete({ kind: 'row', step })}
+          <OverallCostTable
+            data={entityOverallData}
+            phaseLimit={estimation.phaseLimit}
+            showFormulas
+            onRequestDelete={(costItemId) => {
+              const step = populatedSteps.find((candidate) => candidate.id === costItemId)
+              if (step) setPendingDelete({ kind: 'row', step })
+            }}
           />
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-portal-purple-soft px-3.5 py-1.5 text-[13px] font-semibold text-portal-purple-text">
@@ -558,14 +454,6 @@ function EstimationTableCard({  estimation,
               {populatedSteps.length}{' '}
               {populatedSteps.length === 1 ? 'Cost Item' : 'Cost Items'}
             </span>
-            <Button
-              variant="secondary"
-              className="!px-3 !py-1.5 !text-xs"
-              onClick={() => setAddingCostItems(true)}
-            >
-              <span className="text-base leading-none">+</span>
-              Add Cost Item
-            </Button>
           </div>
           {addingCostItems ? (
             <div className="mt-6 border-t border-portal-border pt-6">
@@ -577,7 +465,11 @@ function EstimationTableCard({  estimation,
                 entityCode={activeTab.entityCode}
                 minePhaseLimit={estimation.phaseLimit}
                 electrificationPercent={
-                  scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
+                  resolveElectrificationPercentForEntity(
+                    scopedEstimation.electrificationPercentByEntity ?? {},
+                    activeTab,
+                    tabs,
+                  )
                 }
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
@@ -594,7 +486,11 @@ function EstimationTableCard({  estimation,
           entityCode={activeTab.entityCode}
           minePhaseLimit={scopedEstimation.phaseLimit}
           electrificationPercent={
-            scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
+            resolveElectrificationPercentForEntity(
+              scopedEstimation.electrificationPercentByEntity ?? {},
+              activeTab,
+              tabs,
+            )
           }
           onSubmit={handleSaveSteps}
         />
@@ -609,11 +505,36 @@ function EstimationTableCard({  estimation,
         onConfirm={() => void handleConfirmDelete()}
       />
 
-      {saveError ? (
-        <p className="mt-3 text-sm text-red-600" role="alert">
-          {saveError}
-        </p>
-      ) : null}
+      <Modal
+        open={Boolean(saveError)}
+        title={
+          saveError?.toLowerCase().includes('phase values must sum')
+            ? 'Phase amount mismatch'
+            : saveError?.toLowerCase().includes('electrification')
+              ? 'Design / electrification required'
+              : 'Unable to save'
+        }
+        onClose={() => setSaveError(null)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button variant="primary" onClick={() => setSaveError(null)}>
+            OK
+          </Button>
+        }
+      >
+        <div
+          className="flex items-start gap-3 text-sm text-portal-navy"
+          role="alert"
+        >
+          <MaterialIcon
+            name="warning"
+            size={24}
+            className="shrink-0 text-amber-500"
+          />
+          <p className="whitespace-pre-wrap">{saveError}</p>
+        </div>
+      </Modal>
     </article>
   )
 }

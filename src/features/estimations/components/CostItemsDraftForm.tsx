@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { Button } from '@/shared/components/ui/Button'
+import { Modal } from '@/shared/components/ui/Modal'
+import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { StepDetailsRow } from './StepDetailsRow'
 import { PhaseGrid } from './PhaseGrid'
 import { CardFooter } from './FormFooter'
@@ -131,6 +134,7 @@ export function CostItemsDraftForm({
   // Always start blank — do not copy a previously saved entity %.
   // On submit, fall back to a saved entity % only if the field is left empty.
   const [percent, setPercent] = useState<number | null>(null)
+  const [validationPopup, setValidationPopup] = useState<string | null>(null)
   const [pendingRemove, setPendingRemove] = useState<{
     stepId: string
     stepNumber: number
@@ -182,8 +186,23 @@ export function CostItemsDraftForm({
         `Design / electrification percent is required for ${entityCode ?? 'this entity'}`
     }
     setErrors(nextErrors)
-    if (!isValid(nextErrors)) return
-
+    if (!isValid(nextErrors)) {
+      const sumMessages = Object.entries(nextErrors)
+        .filter(
+          ([key]) =>
+            key.endsWith('.phaseAmountSum') || key === 'phaseAmountSum',
+        )
+        .map(([, message]) => message)
+      const percentMessages = Object.entries(nextErrors)
+        .filter(([key]) => key.startsWith('electrificationPercent.'))
+        .map(([, message]) => message)
+      const messages = [...percentMessages, ...sumMessages]
+      if (messages.length > 0) {
+        setValidationPopup(messages.join('\n'))
+      }
+      return
+    }
+    setValidationPopup(null)
     setSaving(true)
     try {
       await onSubmit(prepared, effectivePercent)
@@ -397,6 +416,35 @@ export function CostItemsDraftForm({
         onCancel={() => setPendingRemove(null)}
         onConfirm={handleConfirmRemove}
       />
+
+      <Modal
+        open={Boolean(validationPopup)}
+        title={
+          validationPopup?.toLowerCase().includes('phase values must sum')
+            ? 'Phase amount mismatch'
+            : 'Unable to save cost item'
+        }
+        onClose={() => setValidationPopup(null)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button variant="primary" onClick={() => setValidationPopup(null)}>
+            OK
+          </Button>
+        }
+      >
+        <div
+          className="flex items-start gap-3 text-sm text-portal-navy"
+          role="alert"
+        >
+          <MaterialIcon
+            name="warning"
+            size={24}
+            className="shrink-0 text-amber-500"
+          />
+          <p className="whitespace-pre-wrap">{validationPopup}</p>
+        </div>
+      </Modal>
     </div>
   )
 }
