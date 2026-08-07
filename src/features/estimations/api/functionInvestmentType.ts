@@ -24,6 +24,76 @@ type FitApiResponse = {
   data?: FunctionInvestmentTypeRecord | null
 }
 
+type InvestmentTypeMasterRow = {
+  investment_type_id: string
+  type: string
+  agent_type?: string
+}
+
+type InvestmentTypeListResponse = {
+  success?: boolean
+  statusCode?: number
+  message?: string
+  data?: InvestmentTypeMasterRow[] | null
+}
+
+let investmentTypeMasterCache: Map<InvestmentTypeSlug, string> | null = null
+let investmentTypeMasterLoad: Promise<Map<InvestmentTypeSlug, string>> | null =
+  null
+
+/** GET /functions/investment-type-list — maps slug → InvestmentType UUID. */
+async function loadInvestmentTypeMasterIds(): Promise<
+  Map<InvestmentTypeSlug, string>
+> {
+  if (investmentTypeMasterCache) return investmentTypeMasterCache
+  if (!investmentTypeMasterLoad) {
+    investmentTypeMasterLoad = (async () => {
+      const data = await fetchFromBackend<InvestmentTypeListResponse>(
+        ENDPOINTS.investments.functionInvestmentTypeList,
+        { method: 'GET' },
+      )
+      if (data.success === false) {
+        throw new Error(data.message || 'Failed to load investment type master')
+      }
+      const map = new Map<InvestmentTypeSlug, string>()
+      const rows = Array.isArray(data.data) ? data.data : []
+      for (const row of rows) {
+        const slug = String(row.type ?? '').trim() as InvestmentTypeSlug
+        const id = String(row.investment_type_id ?? '').trim()
+        if (
+          id &&
+          (slug === 'ownership' ||
+            slug === 'partial-outsourcing' ||
+            slug === 'full-outsourcing' ||
+            slug === 'adhoc-outsourcing')
+        ) {
+          map.set(slug, id)
+        }
+      }
+      investmentTypeMasterCache = map
+      return map
+    })().catch((error) => {
+      investmentTypeMasterLoad = null
+      throw error
+    })
+  }
+  return investmentTypeMasterLoad
+}
+
+/** Resolve InvestmentType master UUID for create/update payloads. */
+async function resolveInvestmentTypeMasterId(
+  slug: InvestmentTypeSlug,
+): Promise<string> {
+  const map = await loadInvestmentTypeMasterIds()
+  const id = map.get(slug)?.trim()
+  if (!id) {
+    throw new Error(
+      `Investment type "${slug}" not found in InvestmentType master list`,
+    )
+  }
+  return id
+}
+
 function readNumericField(
   data: Record<string, unknown>,
   snake: string,
@@ -134,6 +204,10 @@ export async function upsertPartialOutsourcingConfig(
     throw new Error('function_master_id is required')
   }
 
+  const investment_type_id = await resolveInvestmentTypeMasterId(
+    'partial-outsourcing',
+  )
+
   const existingId = payload.function_investment_type_id?.trim()
   if (existingId) {
     const data = await fetchFromBackend<FitApiResponse>(
@@ -143,7 +217,7 @@ export async function upsertPartialOutsourcingConfig(
         json: {
           function_investment_type_id: existingId,
           function_master_id,
-          investment_type_id: 'partial-outsourcing',
+          investment_type_id,
           payback_period: payload.payback_period,
           contribution_percentage: payload.contribution_percentage,
           escalation_percentage: payload.escalation_percentage,
@@ -164,7 +238,7 @@ export async function upsertPartialOutsourcingConfig(
       method: 'POST',
       json: {
         function_master_id,
-        investment_type_id: 'partial-outsourcing',
+        investment_type_id,
         payback_period: payload.payback_period,
         contribution_percentage: payload.contribution_percentage,
         escalation_percentage: payload.escalation_percentage,
@@ -252,6 +326,10 @@ export async function upsertFullOutsourcingConfig(
     throw new Error('from_payback_start is required')
   }
 
+  const investment_type_id = await resolveInvestmentTypeMasterId(
+    'full-outsourcing',
+  )
+
   const existingId = payload.function_investment_type_id?.trim()
   if (existingId) {
     const data = await fetchFromBackend<FitApiResponse>(
@@ -261,7 +339,7 @@ export async function upsertFullOutsourcingConfig(
         json: {
           function_investment_type_id: existingId,
           function_master_id,
-          investment_type_id: 'full-outsourcing',
+          investment_type_id,
           payback_period: payload.payback_period,
           escalation_percentage: payload.escalation_percentage,
           from_payback_start,
@@ -284,7 +362,7 @@ export async function upsertFullOutsourcingConfig(
       method: 'POST',
       json: {
         function_master_id,
-        investment_type_id: 'full-outsourcing',
+        investment_type_id,
         payback_period: payload.payback_period,
         escalation_percentage: payload.escalation_percentage,
         from_payback_start,
@@ -300,6 +378,7 @@ export async function upsertFullOutsourcingConfig(
   }
   return parsed
 }
+
 
 /** Soft map — prefills whatever the API returned (nulls stay null). */
 export function softFullFieldsFromFit(
@@ -353,23 +432,20 @@ export function fitToFullSettings(
 
 async function createInvestmentTypeStub(
   functionMasterId: string,
-  investmentTypeId:
-    | 'ownership'
-    | 'partial-outsourcing'
-    | 'full-outsourcing'
-    | 'adhoc-outsourcing',
+  investmentType: InvestmentTypeSlug,
 ): Promise<FunctionInvestmentTypeRecord> {
   const function_master_id = functionMasterId.trim()
   if (!function_master_id) {
     throw new Error('function_master_id is required')
   }
+  const investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
   const data = await fetchFromBackend<FitApiResponse>(
     ENDPOINTS.investments.functionInvestmentTypeCreate,
     {
       method: 'POST',
       json: {
         function_master_id,
-        investment_type_id: investmentTypeId,
+        investment_type_id,
       },
     },
   )
