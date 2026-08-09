@@ -113,12 +113,13 @@ function StepSection({
               patch: patch as Partial<Phase>,
             })
           }
-          onAddPhase={() =>
+          onAddPhase={(count) =>
             dispatch({
               type: 'ADD_PHASE',
               blockId,
               entityId,
               stepId: step.id,
+              count,
             })
           }
           onRemovePhase={(phaseId) =>

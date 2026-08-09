@@ -23,7 +23,9 @@ import {
   isPartialOutsourcing,
   useOutsourcingPartial,
 } from '@/features/projects/OutsourcingPartialContext'
+import { stampFullPaybackPhasesOnStep } from '@/features/projects/partialContribution'
 import type { FieldErrors, PhaseTypeMaster, Step } from '../types/estimation'
+import { createId } from '../utils/factories'
 
 function recomputeStep(step: Step): Step {
   if (step.amountMode === 'manual') return step
@@ -166,11 +168,28 @@ export function CostItemsDraftForm({
   }
 
   async function handleSubmit() {
-    const prepared = steps.map(recomputeStep)
+    let prepared = steps.map(recomputeStep)
+    if (isFullOutsourcing(outsourcing)) {
+      prepared = prepared.map((step) =>
+        stampFullPaybackPhasesOnStep(
+          step,
+          {
+            escalationPercent: outsourcing.escalationPercent,
+            paybackPeriodYears: outsourcing.paybackPeriodYears,
+            paybackStartPhase: outsourcing.paybackStartPhase,
+            phaseLimit: minePhaseLimit,
+          },
+          () => createId('ph'),
+        ),
+      )
+    }
     const nextErrors: FieldErrors = {}
     for (const step of prepared) {
       validateStep(step, nextErrors, blockId, entityId, minePhaseLimit, {
         phaseValidationMode,
+        paybackPeriodYears: isPartialOutsourcing(outsourcing)
+          ? outsourcing.paybackPeriodYears
+          : null,
       })
     }
     const savedPercent =
@@ -190,7 +209,9 @@ export function CostItemsDraftForm({
       const sumMessages = Object.entries(nextErrors)
         .filter(
           ([key]) =>
-            key.endsWith('.phaseAmountSum') || key === 'phaseAmountSum',
+            key.endsWith('.phaseAmountSum') ||
+            key === 'phaseAmountSum' ||
+            key.endsWith('.paybackRoom'),
         )
         .map(([, message]) => message)
       const percentMessages = Object.entries(nextErrors)
@@ -336,21 +357,23 @@ export function CostItemsDraftForm({
                       clearErrors(prev, [
                         ...Object.keys(patch).map((field) => `${errorPrefix}.${phaseId}.${field}`),
                         `${errorPrefix}.phaseAmountSum`,
+                        `${errorPrefix}.paybackRoom`,
                       ]),
                     )
                   }}
-                  onAddPhase={() =>
+                  onAddPhase={(count) =>
                     setSteps((prev) =>
                       updateStep(prev, step.id, (s) => {
                         const limit = minePhaseLimit ?? s.phaseLimit
                         if (limit == null) return s
-                        const count = nextPhaseBatchCount(s.phases.length, limit)
-                        if (count <= 0) return s
+                        const batch = nextPhaseBatchCount(s.phases.length, limit)
+                        const add = Math.min(batch, Math.max(0, Math.floor(count)))
+                        if (add <= 0) return s
                         return {
                           ...s,
                           phaseLimit: limit,
                           phases: clampPhasesToLimit(
-                            appendTypedPhaseBatch(s.phases, count, createEmptyPhase),
+                            appendTypedPhaseBatch(s.phases, add, createEmptyPhase),
                             limit,
                           ),
                         }

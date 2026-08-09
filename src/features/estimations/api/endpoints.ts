@@ -15,10 +15,14 @@ export const ENDPOINTS = {
     percentagesGetAll: '/percentages/get-all',
     functionAttributes: '/functions/attributes',
     mineWiseFunctionList: '/functions/mine-wise-function-list',
-    functionInvestmentTypeCreate: '/functions/investment-type/create',
-    functionInvestmentTypeUpdate: '/functions/investment-type/update',
-    functionInvestmentTypeDetails: '/functions/investment-type/details',
+    /** Nest FunctionInvestmentType controller */
+    functionInvestmentTypeCreate: '/functions/create-function-investment-type',
+    functionInvestmentTypeUpdate: '/functions/update-function-investment-type',
+    functionInvestmentTypeDetails: '/functions/function-investment-type-details',
     functionInvestmentTypeList: '/functions/investment-type-list',
+  },
+  phases: {
+    list: '/phases/list',
   },
   /** Mine listing only — Manage Existing must use this, never `investments.list`. */
   mines: {

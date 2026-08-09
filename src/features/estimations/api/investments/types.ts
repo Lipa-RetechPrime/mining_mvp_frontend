@@ -6,7 +6,9 @@ export type InvestmentInputDto = {
 }
 
 export type InvestmentPhasingDto = {
-  phase_name: string
+  /** Present on some read/list responses; outbound create/update must use phase_id. */
+  phase_name?: string
+  phase_id?: string
   value: number
   calculation_mode: 'manual' | 'calculated'
   percentage?: number | null
@@ -91,8 +93,6 @@ export type OverallCostItemDto = {
   unit_cost: number
   amount: number
   phases: Record<string, number>
-  /** Optional phase-cell formula labels (e.g. Amount × 20%). */
-  phase_formulas?: Record<string, string>
   /** Present when overall list returns FIT-scoped or mixed rows. */
   function_investment_type_id?: string | null
   cost_item_id?: string | null

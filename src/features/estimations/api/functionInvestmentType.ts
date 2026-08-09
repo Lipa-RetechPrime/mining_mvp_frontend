@@ -1,5 +1,14 @@
 import { BackendApiError, fetchFromBackend } from '@/features/estimations/api/client'
 import { ENDPOINTS } from '@/features/estimations/api/endpoints'
+import {
+  resolvePhaseCodeFromIdOrName,
+  resolvePhaseIdFromCodeOrId,
+} from '@/features/estimations/api/phases'
+import { normalizeCatalogPhaseCode } from '@/features/estimations/phases/phaseTypes'
+import {
+  getPreferredDeliveryMode,
+  setPreferredDeliveryMode,
+} from '@/features/projects/outsourcingPreference'
 
 export type InvestmentTypeSlug =
   | 'ownership'
@@ -21,7 +30,7 @@ type FitApiResponse = {
   success?: boolean
   statusCode?: number
   message?: string
-  data?: FunctionInvestmentTypeRecord | null
+  data?: FunctionInvestmentTypeRecord | FunctionInvestmentTypeRecord[] | null
 }
 
 type InvestmentTypeMasterRow = {
@@ -157,13 +166,30 @@ function parseFit(
   }
 }
 
-/** POST /functions/investment-type/details */
+/** Nest details endpoint returns `data: Fit[]`; create/update return a single object. */
+function parseFitResponse(
+  data: FitApiResponse['data'],
+): FunctionInvestmentTypeRecord | null {
+  if (Array.isArray(data)) {
+    for (const row of data) {
+      const parsed = parseFit(row)
+      if (parsed) return parsed
+    }
+    return null
+  }
+  return parseFit(data)
+}
+
+/** POST /functions/function-investment-type-details */
 export async function getFunctionInvestmentTypeDetails(
   functionMasterId: string,
   investmentType: InvestmentTypeSlug,
 ): Promise<FunctionInvestmentTypeRecord | null> {
   const function_master_id = functionMasterId.trim()
   if (!function_master_id) return null
+
+  // Nest investment_type is UUID — send master id, not the slug label.
+  const investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
 
   try {
     const data = await fetchFromBackend<FitApiResponse>(
@@ -172,7 +198,7 @@ export async function getFunctionInvestmentTypeDetails(
         method: 'POST',
         json: {
           function_master_id,
-          investment_type: investmentType,
+          investment_type: investment_type_id,
         },
       },
     )
@@ -180,11 +206,33 @@ export async function getFunctionInvestmentTypeDetails(
       if (data.statusCode === 404) return null
       throw new Error(data.message || 'Failed to load investment type config')
     }
-    return parseFit(data.data)
+    return withPhaseCodeFromPaybackStart(parseFitResponse(data.data))
   } catch (error) {
     if (error instanceof BackendApiError && error.status === 404) return null
     throw error
   }
+}
+
+export type OutsourcingFitBundle = {
+  partial: FunctionInvestmentTypeRecord | null
+  full: FunctionInvestmentTypeRecord | null
+  adhoc: FunctionInvestmentTypeRecord | null
+}
+
+/** Parallel details fetch for Partial / Full / Adhoc (shared by page + config UI). */
+export async function loadOutsourcingFitBundle(
+  functionMasterId: string,
+): Promise<OutsourcingFitBundle> {
+  const id = functionMasterId.trim()
+  if (!id) {
+    return { partial: null, full: null, adhoc: null }
+  }
+  const [partial, full, adhoc] = await Promise.all([
+    getFunctionInvestmentTypeDetails(id, 'partial-outsourcing'),
+    getFunctionInvestmentTypeDetails(id, 'full-outsourcing'),
+    getFunctionInvestmentTypeDetails(id, 'adhoc-outsourcing'),
+  ])
+  return { partial, full, adhoc }
 }
 
 export type UpsertPartialOutsourcingPayload = {
@@ -227,7 +275,7 @@ export async function upsertPartialOutsourcingConfig(
     if (data.success === false) {
       throw new Error(data.message || 'Failed to update outsourcing config')
     }
-    const parsed = parseFit(data.data)
+    const parsed = parseFitResponse(data.data)
     if (!parsed) throw new Error('Invalid update response for outsourcing config')
     return parsed
   }
@@ -248,7 +296,7 @@ export async function upsertPartialOutsourcingConfig(
   if (data.success === false) {
     throw new Error(data.message || 'Failed to save outsourcing config')
   }
-  const parsed = parseFit(data.data)
+  const parsed = parseFitResponse(data.data)
   if (!parsed) throw new Error('Invalid create response for outsourcing config')
   return parsed
 }
@@ -308,7 +356,7 @@ export type UpsertFullOutsourcingPayload = {
   function_master_id: string
   payback_period: number
   escalation_percentage: number
-  /** Phase code (e.g. C1, P2) — stored via PhaseMaster on the backend. */
+  /** Phase code (e.g. C1, P2) or PhaseMaster UUID — resolved to UUID on save. */
   from_payback_start: string
   function_investment_type_id?: string | null
 }
@@ -321,10 +369,9 @@ export async function upsertFullOutsourcingConfig(
   if (!function_master_id) {
     throw new Error('function_master_id is required')
   }
-  const from_payback_start = payload.from_payback_start.trim()
-  if (!from_payback_start) {
-    throw new Error('from_payback_start is required')
-  }
+  const from_payback_start = await resolvePhaseIdFromCodeOrId(
+    payload.from_payback_start,
+  )
 
   const investment_type_id = await resolveInvestmentTypeMasterId(
     'full-outsourcing',
@@ -349,11 +396,11 @@ export async function upsertFullOutsourcingConfig(
     if (data.success === false) {
       throw new Error(data.message || 'Failed to update full outsourcing config')
     }
-    const parsed = parseFit(data.data)
+    const parsed = parseFitResponse(data.data)
     if (!parsed) {
       throw new Error('Invalid update response for full outsourcing config')
     }
-    return parsed
+    return (await withPhaseCodeFromPaybackStart(parsed))!
   }
 
   const data = await fetchFromBackend<FitApiResponse>(
@@ -372,11 +419,32 @@ export async function upsertFullOutsourcingConfig(
   if (data.success === false) {
     throw new Error(data.message || 'Failed to save full outsourcing config')
   }
-  const parsed = parseFit(data.data)
+  const parsed = parseFitResponse(data.data)
   if (!parsed) {
     throw new Error('Invalid create response for full outsourcing config')
   }
-  return parsed
+  return (await withPhaseCodeFromPaybackStart(parsed))!
+}
+
+/** Nest often stores from_payback_start as UUID; UI needs P9/C1 codes. */
+async function withPhaseCodeFromPaybackStart(
+  record: FunctionInvestmentTypeRecord | null,
+): Promise<FunctionInvestmentTypeRecord | null> {
+  if (!record) return null
+  const raw = record.from_payback_start?.trim()
+  if (!raw) return record
+  const already = normalizeCatalogPhaseCode(raw)
+  if (already) {
+    return already === raw ? record : { ...record, from_payback_start: already }
+  }
+  try {
+    const code = await resolvePhaseCodeFromIdOrName(raw)
+    const normalized = normalizeCatalogPhaseCode(code) ?? code
+    if (normalized === raw) return record
+    return { ...record, from_payback_start: normalized }
+  } catch {
+    return record
+  }
 }
 
 
@@ -409,13 +477,15 @@ export function fitToFullSettings(
 } | null {
   const soft = softFullFieldsFromFit(record)
   if (!soft) return null
-  const { paybackPeriodYears: payback, escalationPercent: escalation, paybackStartPhase: start } =
-    soft
+  const payback = Number(soft.paybackPeriodYears)
+  const escalation = Number(soft.escalationPercent)
+  const startRaw = soft.paybackStartPhase?.trim() || ''
+  const start =
+    normalizeCatalogPhaseCode(startRaw) ??
+    (/^[0-9a-f-]{36}$/i.test(startRaw) ? startRaw : startRaw) // keep UUID for later resolve
   if (
-    payback == null ||
     !Number.isFinite(payback) ||
     payback <= 0 ||
-    escalation == null ||
     !Number.isFinite(escalation) ||
     escalation < 0 ||
     !start
@@ -452,15 +522,10 @@ async function createInvestmentTypeStub(
   if (data.success === false) {
     throw new Error(data.message || 'Failed to save delivery mode')
   }
-  const parsed = parseFit(data.data)
+  const parsed = parseFitResponse(data.data)
   if (!parsed) throw new Error('Invalid response when saving delivery mode')
   return parsed
 }
-
-import {
-  getPreferredDeliveryMode,
-  setPreferredDeliveryMode,
-} from '@/features/projects/outsourcingPreference'
 
 /**
  * Resolve Ownership vs Outsourcing from preference + FunctionInvestmentType rows.
@@ -500,7 +565,7 @@ export async function resolveDeliveryModeFromApi(
 
 /**
  * Persist delivery mode choice for this mine + function.
- * Ownership → creates ownership FIT via investment-type/create immediately.
+ * Ownership → creates ownership FIT via create-function-investment-type immediately.
  * Outsourcing → stores preference only; create runs when the user saves
  * Partial/Full/Adhoc config details.
  */
@@ -515,14 +580,22 @@ export async function persistDeliveryModeChoice(
   }
 }
 
+/** Ensure a FunctionInvestmentType stub exists (Ownership / Adhoc / etc.). */
+export async function ensureFunctionInvestmentTypeStub(
+  functionMasterId: string,
+  investmentType: InvestmentTypeSlug,
+): Promise<FunctionInvestmentTypeRecord> {
+  const existing = await getFunctionInvestmentTypeDetails(
+    functionMasterId,
+    investmentType,
+  )
+  if (existing) return existing
+  return createInvestmentTypeStub(functionMasterId, investmentType)
+}
+
 /** Ensure an adhoc-outsourcing stub exists for Adhoc cost-item isolation. */
 export async function ensureAdhocOutsourcingStub(
   functionMasterId: string,
 ): Promise<FunctionInvestmentTypeRecord> {
-  const existing = await getFunctionInvestmentTypeDetails(
-    functionMasterId,
-    'adhoc-outsourcing',
-  )
-  if (existing) return existing
-  return createInvestmentTypeStub(functionMasterId, 'adhoc-outsourcing')
+  return ensureFunctionInvestmentTypeStub(functionMasterId, 'adhoc-outsourcing')
 }

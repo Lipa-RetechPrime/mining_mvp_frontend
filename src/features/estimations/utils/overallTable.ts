@@ -5,6 +5,7 @@ import { resolvePhaseValue } from '../calculations/calculations'
 import {
   computeExternalAgentPayable,
   computeFullAgentPayable,
+  collectFilledPhaseCodes,
   contributorPhaseAmount,
   distributePaybackEqually,
   latestFilledPhaseAmong,
@@ -31,7 +32,7 @@ export type OverallTableRow = {
   phaseValues: Record<string, number | null>
   /** Present on item rows when the source cost item id is known (entity table delete). */
   costItemId?: string | null
-  /** Optional formula captions under phase values (e.g. Amount × 20%). */
+  /** Optional formula captions under phase values (e.g. Phase value × 20%). */
   phaseFormulas?: Record<string, string | null>
   /** Optional formula caption under the Amount cell. */
   amountFormula?: string | null
@@ -133,10 +134,21 @@ function pushPaybackRow(
   nextRows: OverallTableRow[],
   nextColumns: string[],
   payback: PaybackOverlayEntry,
+  phaseFormula?: string | null,
 ): void {
   const paybackPhaseValues: Record<string, number | null> = {}
+  const phaseFormulas: Record<string, string | null> = {}
   for (const column of nextColumns) {
-    paybackPhaseValues[column] = payback.phaseValues[column] ?? null
+    const value = payback.phaseValues[column] ?? null
+    paybackPhaseValues[column] = value
+    if (
+      phaseFormula &&
+      value != null &&
+      Number.isFinite(value) &&
+      value !== 0
+    ) {
+      phaseFormulas[column] = phaseFormula
+    }
   }
   nextRows.push({
     kind: 'design-charge',
@@ -144,6 +156,8 @@ function pushPaybackRow(
     amount: payback.amount,
     phaseValues: paybackPhaseValues,
     amountFormula: 'Escalated remainder',
+    phaseFormulas:
+      Object.keys(phaseFormulas).length > 0 ? phaseFormulas : undefined,
   })
 }
 
@@ -324,6 +338,8 @@ function buildEntityRows(
   const phaseDesign = scalePhases(phaseSubtotals, factor)
   const phaseSectionTotal = scalePhases(phaseSubtotals, 1 + factor)
 
+  // const subtotalLabel = isLastEntity ? 'Total' : 'Sub-total'
+  // const sectionTotalLabel = isLastEntity ? 'Grand total' : 'Total Amount'
   const percentLabel = Number.isInteger(electrificationPercent)
     ? String(electrificationPercent)
     : electrificationPercent.toFixed(1)
@@ -407,8 +423,10 @@ export type PartialPaybackOverlayInput = {
 /**
  * Insert an equal-split external-agent payback row after each cost item.
  * Contributor phase cells show value × contribution% (not the raw entered amount).
- * Payback for every item in an entity starts after the top-most contributor
- * phase among that entity's cost items (shared start).
+ * Payback for every item in an entity starts after the top-most filled phase
+ * among that entity’s cost items (shared window), then spans the next
+ * `paybackPeriodYears` catalog phases capped by mine phaseLimit.
+ * Example: item A ends P6, item B ends P2 → both payback from after P6.
  * Design% on phases is folded into the single Design/electrification row
  * as (displayed Sub-Total + payback) × design%.
  */
@@ -470,7 +488,7 @@ export function withPartialPaybackOverlay(
 
     const sharedLast = sharedLastContributorByItem.get(index) ?? null
     const targets = nextPaybackPhaseCodes(
-      sharedLast ? [sharedLast] : [],
+      sharedLast ? [sharedLast] : collectFilledPhaseCodes(row.phaseValues),
       settings.paybackPeriodYears,
       settings.phaseLimit,
     )
@@ -501,7 +519,6 @@ export function withPartialPaybackOverlay(
       if (rowKindShowsContributorShare(row.kind)) {
         phaseValues[column] =
           contributorPhaseAmount(raw, settings.contributionPercentage) ?? null
-        // Only annotate item cells — Sub-Total / Design / Total keep their own formulae.
         if (
           row.kind === 'item' &&
           raw != null &&
@@ -519,7 +536,17 @@ export function withPartialPaybackOverlay(
 
     const payback = paybackAfterItem.get(index)
     if (!payback) return
-    pushPaybackRow(nextRows, nextColumns, payback)
+    const targetCount = Object.values(payback.phaseValues).filter(
+      (v) => v != null && Number.isFinite(v) && v !== 0,
+    ).length
+    pushPaybackRow(
+      nextRows,
+      nextColumns,
+      payback,
+      targetCount > 0
+        ? ``
+        : 'Escalated remainder',
+    )
   })
 
   return {
@@ -606,7 +633,15 @@ export function withFullPaybackOverlay(
 
     const payback = paybackAfterItem.get(index)
     if (!payback) return
-    pushPaybackRow(nextRows, nextColumns, payback)
+    const targetCount = Object.keys(payback.phaseValues).length
+    pushPaybackRow(
+      nextRows,
+      nextColumns,
+      payback,
+      targetCount > 0
+        ? `Amount ÷ ${targetCount} × (1 + ${settings.escalationPercent}%)`
+        : `Amount × (1 + ${settings.escalationPercent}%)`,
+    )
   })
 
   return {

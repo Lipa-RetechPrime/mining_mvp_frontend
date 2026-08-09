@@ -22,17 +22,8 @@ function withActiveEntity(estimation: Estimation, entityId?: string): Estimation
     if (!entityId) return undefined;
     const block = estimation.blocks[0];
     if (!block) return entityId;
-    const requested =
-      block.entityTabs.find((tab) => tab.entityId === entityId) ??
-      block.entityTabs.find(
-        (tab) =>
-          tab.entityCode.trim().toLowerCase() === entityId.trim().toLowerCase(),
-      );
-    if (requested) {
-      if (requested.steps.some(isStepPopulated)) return requested.entityId;
-      // Still open the requested ECL/MDO tab even when empty (seed a row below).
-      return requested.entityId;
-    }
+    const requested = block.entityTabs.find((tab) => tab.entityId === entityId);
+    if (requested && requested.steps.some(isStepPopulated)) return entityId;
     const withData = block.entityTabs.find((tab) =>
       tab.steps.some(isStepPopulated),
     );

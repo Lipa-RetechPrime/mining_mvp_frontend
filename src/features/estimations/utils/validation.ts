@@ -2,6 +2,11 @@ import { phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calcu
 import { formatAmount } from './formatAmount'
 import { DEFAULT_INITIAL_PHASE_COUNT } from '../phases/phaseTypes'
 import { isStepPopulated } from '../api/investments/domain'
+import {
+  hasInsufficientPaybackRoom,
+  insufficientPaybackRoomMessage,
+} from '@/features/projects/partialContribution'
+import { phaseTypeIndex } from '../phases/phaseTypes'
 import type { Estimation, EstimationBlock, FieldErrors, Phase, Step } from '../types/estimation'
 
 function stepKey(blockId: string, entityId: string, stepId: string, field: string) {
@@ -26,6 +31,8 @@ export type PhaseValidationMode = 'strict' | 'partial' | 'full' | 'adhoc'
 
 export type EstimationValidationOptions = {
   phaseValidationMode?: PhaseValidationMode
+  /** Partial: years of payback after last filled phase (blocks submit if no room). */
+  paybackPeriodYears?: number | null
   /** @deprecated Prefer phaseValidationMode: 'full' */
   skipPhaseAmountValidation?: boolean
 }
@@ -36,6 +43,28 @@ function resolvePhaseValidationMode(
   if (options?.phaseValidationMode) return options.phaseValidationMode
   if (options?.skipPhaseAmountValidation) return 'full'
   return 'strict'
+}
+
+/** Catalog codes for phases the user has entered (Partial payback start). */
+export function filledPhaseCodesFromStep(step: Step): string[] {
+  return step.phases
+    .filter((phase) => phaseHasEnteredValue(phase) && phase.phaseType)
+    .map((phase) => phase.phaseType as string)
+}
+
+/** Latest filled phase row (by catalog order), used to attach payback-room field errors. */
+export function latestFilledPhase(step: Step): Phase | null {
+  let best: Phase | null = null
+  let bestIdx = -1
+  for (const phase of step.phases) {
+    if (!phaseHasEnteredValue(phase) || !phase.phaseType) continue
+    const idx = phaseTypeIndex(phase.phaseType)
+    if (idx != null && idx > bestIdx) {
+      bestIdx = idx
+      best = phase
+    }
+  }
+  return best
 }
 
 /** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict / partial). */
@@ -67,6 +96,34 @@ export function phaseAmountSumError(
   return `Phase values must sum to Amount (${formatAmount(step.amount ?? 0)}); current sum is ${formatAmount(sum)}`
 }
 
+/** Partial: last filled phase must leave enough slots under mine limit for payback years. */
+export function phasePaybackRoomError(
+  step: Step,
+  minePhaseLimit: number | null | undefined,
+  paybackPeriodYears: number | null | undefined,
+): string | null {
+  const limit = minePhaseLimit ?? step.phaseLimit
+  if (
+    limit == null ||
+    paybackPeriodYears == null ||
+    !Number.isFinite(paybackPeriodYears) ||
+    paybackPeriodYears <= 0
+  ) {
+    return null
+  }
+  const filled = filledPhaseCodesFromStep(step)
+  if (
+    !hasInsufficientPaybackRoom({
+      filledPhaseCodes: filled,
+      phaseLimit: limit,
+      paybackPeriodYears,
+    })
+  ) {
+    return null
+  }
+  return insufficientPaybackRoomMessage(limit, paybackPeriodYears)
+}
+
 export function validateStep(
   step: Step,
   errors: FieldErrors,
@@ -93,10 +150,28 @@ export function validateStep(
     errors[stepKey(blockId, entityId, step.id, 'phaseLimit')] =
       `This cost item has ${step.phases.length} phases; maximum allowed is ${limit}`
   }
+  const mode = resolvePhaseValidationMode(options)
   if (isStepPopulated(step)) {
-    const sumError = phaseAmountSumError(step, resolvePhaseValidationMode(options))
+    const sumError = phaseAmountSumError(step, mode)
     if (sumError) {
       errors[stepKey(blockId, entityId, step.id, 'phaseAmountSum')] = sumError
+    }
+  }
+  if (mode === 'partial') {
+    const roomError = phasePaybackRoomError(
+      step,
+      minePhaseLimit,
+      options?.paybackPeriodYears,
+    )
+    if (roomError) {
+      errors[stepKey(blockId, entityId, step.id, 'paybackRoom')] = roomError
+      const late = latestFilledPhase(step)
+      if (late) {
+        const field =
+          late.calculationMode === 'automatic' ? 'percentage' : 'value'
+        errors[stepKey(blockId, entityId, step.id, `${late.id}.${field}`)] =
+          roomError
+      }
     }
   }
 }

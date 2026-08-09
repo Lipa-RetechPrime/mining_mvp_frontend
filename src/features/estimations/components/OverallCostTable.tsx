@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button } from '@/shared/components/ui/Button'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import {
@@ -8,6 +8,8 @@ import {
 } from '../utils/overallTable'
 import { formatAmount } from '../utils/formatAmount'
 import type { OverallListData } from '../api/investments/types'
+import { resolvePhaseCodeFromIdOrName } from '@/features/estimations/api/phases'
+import { normalizeCatalogPhaseCode } from '../phases/phaseTypes'
 import {
   isFullOutsourcing,
   isPartialOutsourcing,
@@ -64,26 +66,70 @@ export function OverallCostTable({
 }) {
   const outsourcing = useOutsourcingPartial()
   const showActions = typeof onRequestDelete === 'function'
+  const rawFullStart =
+    isFullOutsourcing(outsourcing) && outsourcing.paybackStartPhase
+      ? outsourcing.paybackStartPhase.trim()
+      : ''
+  const catalogFullStart = normalizeCatalogPhaseCode(rawFullStart)
+  const [resolvedFullStart, setResolvedFullStart] = useState<string | null>(
+    catalogFullStart,
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    if (!rawFullStart) {
+      setResolvedFullStart(null)
+      return
+    }
+    if (catalogFullStart) {
+      setResolvedFullStart(catalogFullStart)
+      return
+    }
+    void (async () => {
+      try {
+        const code = await resolvePhaseCodeFromIdOrName(rawFullStart)
+        if (cancelled) return
+        setResolvedFullStart(normalizeCatalogPhaseCode(code) ?? code)
+      } catch {
+        if (!cancelled) setResolvedFullStart(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [rawFullStart, catalogFullStart])
+
   const { rows, phaseColumns } = useMemo(() => {
     const built = buildOverallTableRows(data)
     if (isFullOutsourcing(outsourcing)) {
+      const start =
+        catalogFullStart ?? resolvedFullStart ?? outsourcing.paybackStartPhase
+      if (!start || !normalizeCatalogPhaseCode(start)) {
+        return built
+      }
       return withFullPaybackOverlay(built, {
-        escalationPercent: outsourcing.escalationPercent,
-        paybackPeriodYears: outsourcing.paybackPeriodYears,
-        paybackStartPhase: outsourcing.paybackStartPhase,
+        escalationPercent: Number(outsourcing.escalationPercent),
+        paybackPeriodYears: Number(outsourcing.paybackPeriodYears),
+        paybackStartPhase: normalizeCatalogPhaseCode(start) ?? start,
         phaseLimit,
       })
     }
     if (isPartialOutsourcing(outsourcing)) {
       return withPartialPaybackOverlay(built, {
-        contributionPercentage: outsourcing.contributionPercentage,
-        escalationPercent: outsourcing.escalationPercent,
-        paybackPeriodYears: outsourcing.paybackPeriodYears,
+        contributionPercentage: Number(outsourcing.contributionPercentage),
+        escalationPercent: Number(outsourcing.escalationPercent),
+        paybackPeriodYears: Number(outsourcing.paybackPeriodYears),
         phaseLimit,
       })
     }
     return built
-  }, [data, outsourcing, phaseLimit])
+  }, [
+    data,
+    outsourcing,
+    phaseLimit,
+    catalogFullStart,
+    resolvedFullStart,
+  ])
 
   if (rows.length === 0) {
     return (

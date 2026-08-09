@@ -4,10 +4,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { getMineWiseFunctionList } from '@/features/estimations/api/master'
 import {
-  ensureAdhocOutsourcingStub,
+  ensureFunctionInvestmentTypeStub,
   fitToFullSettings,
   fitToPartialSettings,
-  getFunctionInvestmentTypeDetails,
+  loadOutsourcingFitBundle,
   softFullFieldsFromFit,
   softPartialFieldsFromFit,
   type FunctionInvestmentTypeRecord,
@@ -244,20 +244,8 @@ export function OutsourcingPlaceholder({
     setHydrated(false)
     void (async () => {
       try {
-        const [partialFit, fullFit, adhocFit] = await Promise.all([
-          getFunctionInvestmentTypeDetails(
-            currentFunctionId,
-            'partial-outsourcing',
-          ),
-          getFunctionInvestmentTypeDetails(
-            currentFunctionId,
-            'full-outsourcing',
-          ),
-          getFunctionInvestmentTypeDetails(
-            currentFunctionId,
-            'adhoc-outsourcing',
-          ),
-        ])
+        const { partial: partialFit, full: fullFit, adhoc: adhocFit } =
+          await loadOutsourcingFitBundle(currentFunctionId)
         if (cancelled) return
 
         const partialId = partialFit?.function_investment_type_id ?? null
@@ -465,7 +453,10 @@ export function OutsourcingPlaceholder({
         onContinueToEstimation?.('full', settings)
         setSavedMessage('Configuration saved. Opening cost item form…')
       } else {
-        const saved = await ensureAdhocOutsourcingStub(functionId)
+        const saved = await ensureFunctionInvestmentTypeStub(
+          functionId,
+          'adhoc-outsourcing',
+        )
         setAdhocFitId(saved.function_investment_type_id)
         setFitId(saved.function_investment_type_id)
         setPreferredOutsourcingKind(projectId, functionId, 'adhoc')
@@ -476,12 +467,22 @@ export function OutsourcingPlaceholder({
         setSavedMessage('Configuration saved. Opening cost item form…')
       }
     } catch (err) {
-      setErrors({
-        escalationPercent:
-          err instanceof Error
-            ? err.message
-            : 'Failed to save outsourcing configuration.',
-      })
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to save outsourcing configuration.'
+      const lower = message.toLowerCase()
+      if (
+        lower.includes('from_payback_start') ||
+        lower.includes('payback start') ||
+        lower.includes('phase')
+      ) {
+        setErrors({ paybackStartPhase: message })
+      } else if (lower.includes('escalation')) {
+        setErrors({ escalationPercent: message })
+      } else {
+        setErrors({ escalationPercent: message })
+      }
     } finally {
       setSaving(false)
     }
@@ -642,10 +643,10 @@ export function OutsourcingPlaceholder({
               />
             </div>
           </div>
-          <p className="text-xs text-gray-600">
+          {/* <p className="text-xs text-gray-600">
             After save, settings are stored via FunctionInvestmentType API and
             the cost item form opens. Phase count still follows life of mine.
-          </p>
+          </p> */}
         </div>
       ) : (
         <div className="space-y-4 border-t border-portal-border pt-4">
@@ -732,12 +733,12 @@ export function OutsourcingPlaceholder({
               ) : null}
             </div>
           </div>
-          <p className="text-xs text-gray-600">
+          {/* <p className="text-xs text-gray-600">
             After save, settings are stored via FunctionInvestmentType API and
             the cost item form opens. Phase values are not entered manually —
             payback is distributed on the Overall sheet from the selected start
             phase.
-          </p>
+          </p> */}
         </div>
       )}
 

@@ -1,7 +1,12 @@
 import { BackendApiError, fetchBlobFromBackend, fetchFromBackend } from '@/features/estimations/api/client'
 import { ENDPOINTS } from '../endpoints'
 import { getEntities } from '../master'
+import { loadPhaseIdByNameMap } from '../phases'
 import { savePercentagesForEntities } from './electrification'
+import {
+  applyStoredFitStampsToEstimation,
+  rememberCostItemFits,
+} from './fitStamps'
 import {
   ensureEntityTabs,
   mapDtoToEstimation,
@@ -57,10 +62,29 @@ export function invalidateEstimationsListCache(): void {
   invalidateOverallListCache()
 }
 
+function rememberFitsFromEstimation(estimation: Estimation): void {
+  const fitId = estimation.functionInvestmentTypeId?.trim()
+  const entries: Array<{ costItemId?: string | null; fitId?: string | null }> = []
+  for (const block of estimation.blocks) {
+    for (const tab of block.entityTabs) {
+      for (const step of tab.steps) {
+        if (!isStepPopulated(step)) continue
+        entries.push({
+          costItemId: step.id,
+          fitId: step.functionInvestmentTypeId?.trim() || fitId,
+        })
+      }
+    }
+  }
+  rememberCostItemFits(entries)
+}
+
 export async function fetchInvestments(): Promise<Estimation[]> {
   const data = await fetchFromBackend<InvestmentListResponse>(ENDPOINTS.investments.list)
   assertApiSuccess(data, 'Failed to load estimations')
-  return (data.data ?? []).map(mapDtoToEstimation)
+  return (data.data ?? []).map((dto) =>
+    applyStoredFitStampsToEstimation(mapDtoToEstimation(dto)),
+  )
 }
 
 export async function listEstimations(): Promise<Estimation[]> {
@@ -184,26 +208,14 @@ function assertEstimationValidForSave(
   estimation: Estimation,
   options?: {
     phaseValidationMode?: 'strict' | 'partial' | 'full' | 'adhoc'
+    paybackPeriodYears?: number | null
     skipPhaseAmountValidation?: boolean
   },
 ): void {
   const errors = validateEstimation(estimation, options)
   if (isValid(errors)) return
-  const sumMessages = Object.entries(errors)
-    .filter(
-      ([key]) =>
-        key.endsWith('.phaseAmountSum') || key === 'phaseAmountSum',
-    )
-    .map(([, message]) => message)
-  const percentMessages = Object.entries(errors)
-    .filter(([key]) => key.startsWith('electrificationPercent.'))
-    .map(([, message]) => message)
-  const messages = [...percentMessages, ...sumMessages]
-  throw new Error(
-    messages.length > 0
-      ? messages.join('\n')
-      : (Object.values(errors)[0] ?? 'Validation failed'),
-  )
+  const messages = Object.values(errors)
+  throw new Error(messages[0] ?? 'Validation failed')
 }
 
 function isInvestmentsListUnavailable(error: unknown): boolean {
@@ -398,7 +410,11 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
     await getEntities(prepared.blocks[0]?.sectorId || 'residential-buildings'),
   )
 
-  const payload = mapEstimationToDto(orderedPrepared, 'create')
+  const payload = mapEstimationToDto(
+    orderedPrepared,
+    'create',
+    await loadPhaseIdByNameMap(),
+  )
   let data: ApiResponse
   try {
     data = await fetchFromBackend<ApiResponse>(ENDPOINTS.investments.create, {
@@ -471,24 +487,12 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
       }
     })
     const activeStillValid = entityTabs.some((tab) => tab.entityId === block.activeEntityId)
-    const previousActive = block.entityTabs.find(
-      (tab) => tab.entityId === block.activeEntityId,
-    )
-    const activeByCode = previousActive
-      ? entityTabs.find(
-          (tab) =>
-            tab.entityCode.trim().toLowerCase() ===
-            previousActive.entityCode.trim().toLowerCase(),
-        )
-      : undefined
     return {
       ...block,
       entityTabs,
       activeEntityId: activeStillValid
         ? block.activeEntityId
-        : (activeByCode?.entityId ??
-          entityTabs.find((tab) => isUuid(tab.entityId))?.entityId ??
-          block.activeEntityId),
+        : (entityTabs.find((tab) => isUuid(tab.entityId))?.entityId ?? block.activeEntityId),
     }
   })
 
@@ -507,6 +511,7 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
     entityIdsFromCreate,
   )
   invalidateEstimationsListCache()
+  rememberFitsFromEstimation({ ...created, percentageMasterIdByEntity })
   return { ...created, percentageMasterIdByEntity }
 }
 
@@ -515,6 +520,7 @@ export async function updateEstimation(
   body: Estimation,
   options?: {
     phaseValidationMode?: 'strict' | 'partial' | 'full' | 'adhoc'
+    paybackPeriodYears?: number | null
     skipPhaseAmountValidation?: boolean
   },
 ): Promise<Estimation> {
@@ -566,7 +572,11 @@ export async function updateEstimation(
   // FIT fields, so re-sent peer items get stamped as the active type and
   // duplicate on the overall sheet. Isolation relies on top-level
   // function_investment_type_id (backend must not delete other FIT rows).
-  const payload = mapEstimationToDto(updated, 'update')
+  const payload = mapEstimationToDto(
+    updated,
+    'update',
+    await loadPhaseIdByNameMap(),
+  )
   try {
     invalidateEstimationsListCache()
     const data = await fetchFromBackend<ApiResponse>(ENDPOINTS.investments.update, {
@@ -582,7 +592,9 @@ export async function updateEstimation(
   const percentageMasterIdByEntity = await persistElectrificationPercent(updated)
   invalidateEstimationsListCache()
 
-  return withMasterEntityTabs({ ...updated, percentageMasterIdByEntity })
+  const result = await withMasterEntityTabs({ ...updated, percentageMasterIdByEntity })
+  rememberFitsFromEstimation(result)
+  return result
 }
 
 export async function deleteEstimation(id: string): Promise<void> {
@@ -624,8 +636,10 @@ export async function addCostItemsToEstimation(
   steps: Step[],
   currentEstimation?: Estimation,
   electrificationPercent?: number | null,
-  /** Function-scoped FIT — same Ownership/Outsourcing for every entity under the function. */
-  functionInvestmentTypeId?: string | null,
+  options?: {
+    phaseValidationMode?: 'strict' | 'partial' | 'full' | 'adhoc'
+    paybackPeriodYears?: number | null
+  },
 ): Promise<Estimation> {
   const current =
     currentEstimation &&
@@ -634,8 +648,8 @@ export async function addCostItemsToEstimation(
       : await getEstimation(estimationId)
 
   const fitId =
-    functionInvestmentTypeId?.trim() ||
     current.functionInvestmentTypeId?.trim() ||
+    steps.map((step) => step.functionInvestmentTypeId?.trim()).find(Boolean) ||
     null
   if (!fitId) {
     throw new Error(
@@ -657,11 +671,15 @@ export async function addCostItemsToEstimation(
     }
   }
 
+  const defaultFunctionMasterId = current.blocks[0]?.sectorId || null
   let next: Estimation = { ...current, functionInvestmentTypeId: fitId }
-  next = populatedSteps.reduce(
-    (acc, step) => appendCostItem(acc, entityId, step),
-    next,
-  )
+  for (const step of populatedSteps) {
+    next = appendCostItem(next, entityId, {
+      ...step,
+      functionInvestmentTypeId: step.functionInvestmentTypeId?.trim() || fitId,
+      functionMasterId: step.functionMasterId?.trim() || defaultFunctionMasterId,
+    })
+  }
 
   const masters = await getEntities(next.blocks[0]?.sectorId || 'residential-buildings')
   next = ensureEntityTabs(next, masters)
@@ -677,11 +695,20 @@ export async function addCostItemsToEstimation(
         [percentKey]: electrificationPercent as number,
       },
     }
-  } else {
-    next = { ...next, functionInvestmentTypeId: fitId }
   }
 
-  return updateEstimation(estimationId, next)
+  return updateEstimation(
+    estimationId,
+    {
+      ...next,
+      functionInvestmentTypeId: fitId,
+    },
+    {
+      phaseValidationMode: options?.phaseValidationMode,
+      paybackPeriodYears: options?.paybackPeriodYears,
+      skipPhaseAmountValidation: options?.phaseValidationMode === 'full',
+    },
+  )
 }
 
 export async function removeCostItemFromEstimation(

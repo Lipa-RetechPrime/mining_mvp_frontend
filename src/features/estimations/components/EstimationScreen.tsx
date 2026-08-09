@@ -86,6 +86,9 @@ export function EstimationScreen({
         : isPartialOutsourcing(outsourcingPartial)
           ? "partial"
           : "strict",
+    paybackPeriodYears: isPartialOutsourcing(outsourcingPartial)
+      ? outsourcingPartial.paybackPeriodYears
+      : null,
   });
   const { items, loading, refresh, replaceItem, open, remove } =
     useEstimationList();

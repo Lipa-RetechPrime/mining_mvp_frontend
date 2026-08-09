@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Button } from '@/shared/components/ui/Button'
 import { Input } from '@/shared/components/ui/Input'
 import { PhaseCard } from './PhaseCard'
@@ -5,10 +6,22 @@ import {
   PHASE_ADD_BATCH_SIZE,
   canAddPhase,
   nextPhaseBatchCount,
+  normalizeCatalogPhaseCode,
+  phaseTypeIndex,
 } from '../phases/phaseTypes'
 import { formatAmount } from '../utils/formatAmount'
-import { phaseAmountSumError } from '../utils/validation'
-import { buildFullCostItemPaybackPhases } from '@/features/projects/partialContribution'
+import {
+  filledPhaseCodesFromStep,
+  latestFilledPhase,
+  phaseAmountSumError,
+} from '../utils/validation'
+import {
+  buildFullCostItemPaybackPhases,
+  hasInsufficientPaybackRoom,
+  insufficientPaybackRoomMessage,
+  nextPaybackPhaseCodes,
+} from '@/features/projects/partialContribution'
+import { resolvePhaseCodeFromIdOrName } from '@/features/estimations/api/phases'
 import {
   isAdhocOutsourcing,
   isFullOutsourcing,
@@ -25,16 +38,90 @@ function FullPaybackPhaseGrid({
   minePhaseLimit: number | null | undefined
 }) {
   const outsourcing = useOutsourcingPartial()
-  if (!isFullOutsourcing(outsourcing)) return null
+  const isFull = isFullOutsourcing(outsourcing)
+  const rawStart =
+    isFull && outsourcing.paybackStartPhase
+      ? outsourcing.paybackStartPhase.trim()
+      : ''
+  const catalogStart = normalizeCatalogPhaseCode(rawStart)
+  const [resolvedStart, setResolvedStart] = useState<string | null>(null)
+  const [resolveError, setResolveError] = useState<string | null>(null)
 
+  useEffect(() => {
+    let cancelled = false
+    setResolveError(null)
+
+    if (!isFull || !rawStart) {
+      setResolvedStart(null)
+      return
+    }
+    if (catalogStart) {
+      setResolvedStart(catalogStart)
+      return
+    }
+
+    void (async () => {
+      try {
+        const code = await resolvePhaseCodeFromIdOrName(rawStart)
+        if (cancelled) return
+        setResolvedStart(normalizeCatalogPhaseCode(code) ?? code)
+      } catch (error) {
+        if (cancelled) return
+        setResolvedStart(null)
+        setResolveError(
+          error instanceof Error
+            ? error.message
+            : 'Could not resolve payback start phase from Full contribution settings.',
+        )
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isFull, rawStart, catalogStart])
+
+  if (!isFull || !outsourcing) return null
+
+  const startPhase = catalogStart ?? resolvedStart
   const phaseLimit = minePhaseLimit ?? step.phaseLimit ?? null
-  const phases = buildFullCostItemPaybackPhases({
-    totalAmount: step.amount,
-    escalationPercent: outsourcing.escalationPercent,
-    paybackPeriodYears: outsourcing.paybackPeriodYears,
-    paybackStartPhase: outsourcing.paybackStartPhase,
-    phaseLimit,
-  })
+  const paybackYears = Number(outsourcing.paybackPeriodYears)
+  const escalation = Number(outsourcing.escalationPercent)
+
+  const phases =
+    startPhase &&
+    Number.isFinite(paybackYears) &&
+    paybackYears > 0 &&
+    Number.isFinite(escalation) &&
+    escalation >= 0
+      ? buildFullCostItemPaybackPhases({
+          totalAmount: step.amount,
+          escalationPercent: escalation,
+          paybackPeriodYears: paybackYears,
+          paybackStartPhase: startPhase,
+          phaseLimit,
+        })
+      : []
+
+  const emptyReason = (() => {
+    if (!rawStart) {
+      return 'Full contribution is missing a payback start phase. Open Edit outsourcing configuration and select a start phase (e.g. P1).'
+    }
+    if (resolveError) return resolveError
+    if (!startPhase) {
+      return `Payback start "${rawStart}" is not a known catalog phase (C1/P1…). Re-save Full contribution settings.`
+    }
+    if (phaseTypeIndex(startPhase) == null) {
+      return `Payback start "${startPhase}" is not a known catalog phase.`
+    }
+    if (!Number.isFinite(paybackYears) || paybackYears <= 0) {
+      return 'Full contribution payback period years must be greater than 0.'
+    }
+    if (phases.length === 0) {
+      return `No payback phases for start ${startPhase} under mine phase limit (${phaseLimit ?? 'unset'}). Check Full contribution settings.`
+    }
+    return null
+  })()
 
   return (
     <section>
@@ -42,17 +129,12 @@ function FullPaybackPhaseGrid({
         <h4 className="text-[15px] font-semibold text-[--color-portal-navy]">
           Phasing of Investment
         </h4>
-        <p className="mt-1 text-sm font-normal text-[--text-color]">
-          Read-only payback phases from the configured start phase across the
-          payback period. Each value is the cost-item amount split equally,
-          then increased by escalation — same as the Overall sheet.
-        </p>
       </div>
 
       {phases.length === 0 ? (
         <p className="text-sm text-amber-700" role="status">
-          No payback phases can be shown for the current start phase and mine
-          phase limit. Check Full contribution settings.
+          {emptyReason ??
+            'No payback phases can be shown for the current start phase and mine phase limit. Check Full contribution settings.'}
         </p>
       ) : (
         <div className="flex flex-wrap gap-4">
@@ -77,7 +159,6 @@ function FullPaybackPhaseGrid({
                   tabIndex={-1}
                   aria-readonly="true"
                   aria-label={`Payback phase ${phase.phaseType} value`}
-                  title="Equal share of amount × (1 + escalation%)"
                   value={formatAmount(phase.value)}
                 />
               </div>
@@ -104,8 +185,8 @@ export function PhaseGrid({
   /** Mine-level max phases; drives add-phase limits for this cost item. */
   minePhaseLimit: number | null | undefined
   onChangePhase: (phaseId: string, patch: Partial<Phase>) => void
-  /** Append the next batch of hardcoded phases (up to 8, never past the max). */
-  onAddPhase: () => void
+  /** Append `count` phases (capped by mine max / Partial payback reserve). */
+  onAddPhase: (count: number) => void
   onRemovePhase: (phaseId: string) => void
 }) {
   const outsourcing = useOutsourcingPartial()
@@ -116,10 +197,11 @@ export function PhaseGrid({
   const isPartial = isPartialOutsourcing(outsourcing)
   const isAdhoc = isAdhocOutsourcing(outsourcing)
   const phaseLimit = minePhaseLimit ?? step.phaseLimit ?? null
-  const canAddMore = canAddPhase(step.phases.length, phaseLimit)
+  const paybackPeriodYears = isPartial ? outsourcing.paybackPeriodYears : null
   const remaining =
     phaseLimit != null ? Math.max(0, Math.floor(phaseLimit) - step.phases.length) : 0
   const addCount = nextPhaseBatchCount(step.phases.length, phaseLimit)
+  const canAddMore = canAddPhase(step.phases.length, phaseLimit)
   const phaseValidationMode = isAdhoc
     ? 'adhoc'
     : isPartial
@@ -133,6 +215,31 @@ export function PhaseGrid({
   const limitMissing = phaseLimit == null
   const canRemovePhase = step.phases.length > 0
 
+  const filledPhaseCodes = filledPhaseCodesFromStep(step)
+  const lateFilledPhase = latestFilledPhase(step)
+  const paybackTargetCodes =
+    isPartial && paybackPeriodYears != null && paybackPeriodYears > 0
+      ? nextPaybackPhaseCodes(filledPhaseCodes, paybackPeriodYears, phaseLimit)
+      : []
+  const paybackTargetLabel =
+    paybackTargetCodes.length > 0 ? paybackTargetCodes.join(', ') : ''
+  const paybackRoomMessage =
+    isPartial &&
+    phaseLimit != null &&
+    paybackPeriodYears != null &&
+    paybackPeriodYears > 0 &&
+    hasInsufficientPaybackRoom({
+      filledPhaseCodes,
+      phaseLimit,
+      paybackPeriodYears,
+    })
+      ? insufficientPaybackRoomMessage(phaseLimit, paybackPeriodYears)
+      : null
+  const paybackRoomWarning =
+    paybackRoomMessage ??
+    errors[`${errorPrefix}.paybackRoom`] ??
+    null
+
   return (
     <section>
       <div className="mb-4">
@@ -142,7 +249,7 @@ export function PhaseGrid({
             {isAdhoc
               ? 'Enter phase values manually. They do not need to sum to Amount.'
               : isPartial
-                ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet.'
+                ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet after the last filled phase.'
                 : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
           </p>
           {sumError ? (
@@ -153,6 +260,11 @@ export function PhaseGrid({
           {overLimitError ? (
             <p className="mt-1.5 text-sm text-red-600" role="alert">
               {overLimitError}
+            </p>
+          ) : null}
+          {paybackRoomWarning ? (
+            <p className="mt-1.5 text-sm text-amber-700" role="alert">
+              {paybackRoomWarning}
             </p>
           ) : null}
           {limitMissing ? (
@@ -167,25 +279,42 @@ export function PhaseGrid({
         <p className="mb-3 text-xs text-[--text-color]">
           Using {step.phases.length} of {phaseLimit} phases
           {remaining > 0 ? ` · ${remaining} remaining` : ' · limit reached'}
+          {paybackTargetLabel
+            ? ` · payback on ${paybackTargetLabel}`
+            : isPartial && paybackPeriodYears != null && paybackPeriodYears > 0
+              ? ' · payback follows the last filled phase'
+              : ''}
         </p>
       ) : null}
 
       {step.phases.length > 0 ? (
         <div className="flex flex-wrap gap-4">
-          {step.phases.map((phase) => (
-            <PhaseCard
-              key={phase.id}
-              phase={phase}
-              stepAmount={step.amount ?? 0}
-              errors={{
-                percentage: errors[`${errorPrefix}.${phase.id}.percentage`] ?? '',
-                value: errors[`${errorPrefix}.${phase.id}.value`] ?? '',
-              }}
-              onChange={(patch) => onChangePhase(phase.id, patch)}
-              canRemove={canRemovePhase}
-              onRemove={() => onRemovePhase(phase.id)}
-            />
-          ))}
+          {step.phases.map((phase) => {
+            const isLateFilled =
+              Boolean(paybackRoomMessage) && lateFilledPhase?.id === phase.id
+            return (
+              <PhaseCard
+                key={phase.id}
+                phase={phase}
+                stepAmount={step.amount ?? 0}
+                errors={{
+                  percentage:
+                    errors[`${errorPrefix}.${phase.id}.percentage`] ||
+                    (isLateFilled && phase.calculationMode === 'automatic'
+                      ? paybackRoomMessage ?? ''
+                      : ''),
+                  value:
+                    errors[`${errorPrefix}.${phase.id}.value`] ||
+                    (isLateFilled && phase.calculationMode !== 'automatic'
+                      ? paybackRoomMessage ?? ''
+                      : ''),
+                }}
+                onChange={(patch) => onChangePhase(phase.id, patch)}
+                canRemove={canRemovePhase}
+                onRemove={() => onRemovePhase(phase.id)}
+              />
+            )
+          })}
         </div>
       ) : null}
 
@@ -193,7 +322,9 @@ export function PhaseGrid({
         <Button
           variant="secondary"
           disabled={!canAddMore || addCount <= 0}
-          onClick={onAddPhase}
+          onClick={() => {
+            if (addCount > 0) onAddPhase(addCount)
+          }}
           title={
             limitMissing
               ? 'Set the mine phase limit first'

@@ -62,6 +62,8 @@ export interface UseSubmitEstimationValue {
 
 export function useSubmitEstimation(options?: {
   phaseValidationMode?: PhaseValidationMode;
+  /** Partial: required so payback-room validation can block submit. */
+  paybackPeriodYears?: number | null;
   /** @deprecated Prefer phaseValidationMode: 'full' */
   skipPhaseAmountValidation?: boolean;
 }): UseSubmitEstimationValue {
@@ -76,13 +78,16 @@ export function useSubmitEstimation(options?: {
     const prepared = recomputeAll(estimation);
     const errors = validateEstimation(prepared, {
       phaseValidationMode,
+      paybackPeriodYears: options?.paybackPeriodYears,
     });
     dispatch({ type: "SET_ERRORS", errors });
     if (!isValid(errors)) {
       const sumMessages = Object.entries(errors)
         .filter(
           ([key]) =>
-            key.endsWith(".phaseAmountSum") || key === "phaseAmountSum",
+            key.endsWith(".phaseAmountSum") ||
+            key === "phaseAmountSum" ||
+            key.endsWith(".paybackRoom"),
         )
         .map(([, message]) => message);
       const percentMessages = Object.entries(errors)
@@ -105,6 +110,7 @@ export function useSubmitEstimation(options?: {
         ? await createEstimation(prepared)
         : await updateEstimation(prepared.mine_id || prepared.id!, prepared, {
             phaseValidationMode,
+            paybackPeriodYears: options?.paybackPeriodYears,
             skipPhaseAmountValidation: phaseValidationMode === "full",
           });
       // Keep peer cost-function blocks in memory (save responses are scoped).

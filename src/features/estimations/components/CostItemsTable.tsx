@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/shared/components/ui/Button'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
-import { Modal } from '@/shared/components/ui/Modal'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { EntityTabs } from './EntityTabs'
 import { EstimationBlockHeader } from './EstimationBlockHeader'
@@ -22,13 +21,20 @@ import type { OverallListData } from '../api/investments/types'
 import type { Estimation, PhaseTypeMaster, Step } from '../types/estimation'
 import { buildEntityOverallListData } from '../utils/overallTable'
 import { resolveElectrificationPercentForEntity } from '../utils/validation'
+import {
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
+import { stampFullPaybackPhasesOnStep } from '@/features/projects/partialContribution'
+import { createId } from '../utils/factories'
 
 type PendingDelete =
   | { kind: 'row'; step: Step }
   | { kind: 'table' }
 
-
-function EstimationTableCard({  estimation,
+function EstimationTableCard({
+  estimation,
   phaseTypes,
   functionMasterId: functionMasterIdProp,
   functionName,
@@ -50,6 +56,7 @@ function EstimationTableCard({  estimation,
   onChanged: () => void | Promise<void>
   onItemUpdated: (estimation: Estimation) => void
 }) {
+  const outsourcing = useOutsourcingPartial()
   const searchParams = useSearchParams()
   const functionMasterId =
     asUuidOrNull(functionMasterIdProp) ||
@@ -112,8 +119,8 @@ function EstimationTableCard({  estimation,
         tabs,
       ),
       functionName: displaySectorName,
-      mineId: estimation.mine_id || estimation.id || '',
-      mineName: estimation.siteSubtitle || '',
+      mineId: estimation.mine_id ?? estimation.id ?? '',
+      mineName: estimation.mine_id ?? estimation.id ?? '',
     })
   }, [
     isOverallTab,
@@ -124,7 +131,6 @@ function EstimationTableCard({  estimation,
     displaySectorName,
     estimation.mine_id,
     estimation.id,
-    estimation.siteSubtitle,
   ])
 
   const loadOverall = useCallback(async () => {
@@ -217,37 +223,57 @@ function EstimationTableCard({  estimation,
   async function handleSaveSteps(steps: Step[], electrificationPercent: number | null) {
     if (!estimation.id || !activeTab) return
     setSaveError(null)
-    // Delivery mode / FIT is per cost function (shared by ECL and MDO), not per entity.
-    const fitId =
-      functionInvestmentTypeId?.trim() ||
-      scopedEstimation.functionInvestmentTypeId?.trim() ||
-      null
-    if (!fitId) {
-      setSaveError(
-        'Select Ownership or save Outsourcing configuration before saving cost items.',
-      )
-      throw new Error('save failed')
-    }
     try {
-      const baseForSave: Estimation = {
+      const fitId =
+        functionInvestmentTypeId?.trim() ||
+        scopedEstimation.functionInvestmentTypeId?.trim() ||
+        estimation.functionInvestmentTypeId?.trim() ||
+        null
+      if (!fitId) {
+        throw new Error(
+          'Select Ownership or save Outsourcing configuration before saving cost items.',
+        )
+      }
+      const phaseValidationMode = isFullOutsourcing(outsourcing)
+        ? 'full'
+        : isPartialOutsourcing(outsourcing)
+          ? 'partial'
+          : 'strict'
+      let stepsForSave = steps
+      if (isFullOutsourcing(outsourcing)) {
+        stepsForSave = steps.map((step) =>
+          stampFullPaybackPhasesOnStep(
+            step,
+            {
+              escalationPercent: outsourcing.escalationPercent,
+              paybackPeriodYears: outsourcing.paybackPeriodYears,
+              paybackStartPhase: outsourcing.paybackStartPhase,
+              phaseLimit: estimation.phaseLimit,
+            },
+            () => createId('ph'),
+          ),
+        )
+      }
+      const estimationForSave: Estimation = {
         ...scopedEstimation,
         id: estimation.id,
-        mine_id: estimation.mine_id || estimation.id,
+        mine_id: estimation.mine_id ?? scopedEstimation.mine_id ?? estimation.id,
         functionInvestmentTypeId: fitId,
       }
       const updated = await addCostItemsToEstimation(
         estimation.id,
         activeTab.entityId,
-        steps,
-        baseForSave,
+        stepsForSave,
+        estimationForSave,
         electrificationPercent,
-        fitId,
+        {
+          phaseValidationMode,
+          paybackPeriodYears: isPartialOutsourcing(outsourcing)
+            ? outsourcing.paybackPeriodYears
+            : null,
+        },
       )
-      onItemUpdated({
-        ...updated,
-        functionInvestmentTypeId:
-          updated.functionInvestmentTypeId?.trim() || fitId,
-      })
+      onItemUpdated(updated)
       setAddingCostItems(false)
       await onChanged()
       if (isOverallTab) await loadOverall()
@@ -275,7 +301,6 @@ function EstimationTableCard({  estimation,
           activeTab.entityId,
           pendingDelete.step.id,
         )
-        // Keep this tab selected and show the empty message immediately.
         onItemUpdated(updated)
         setAddingCostItems(false)
         if (isOverallTab) await loadOverall()
@@ -302,7 +327,9 @@ function EstimationTableCard({  estimation,
     try {
       await downloadEstimationExcel(estimation.mine_id)
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : 'Failed to download Excel. Please try again.')
+      setSaveError(
+        error instanceof Error ? error.message : 'Failed to download Excel. Please try again.',
+      )
     } finally {
       setDownloading(false)
     }
@@ -350,9 +377,8 @@ function EstimationTableCard({  estimation,
           setPendingDelete(null)
         }}
         actions={
-          <>
-            {isOverallTab ? (
-              <>
+          isOverallTab ? (
+            <>
               <Button
                 variant="secondary"
                 className="!px-3 !py-1.5 !text-xs"
@@ -363,37 +389,24 @@ function EstimationTableCard({  estimation,
                 {downloading ? 'Downloading…' : 'Download'}
               </Button>
               <Button
-              variant="secondary"
-              className="!px-3 !py-1.5 !text-xs"
-              onClick={() => {
-                const firstWithData = tabs.find((t) =>
-                  t.steps.some(isStepPopulated),
-                )
-                onEdit(
-                  estimation.id!,
-                  isOverallTab
-                    ? (firstWithData?.entityId ?? tabs[0]?.entityId ?? '')
-                    : (activeTab?.entityId ?? ''),
-                )
-              }}
-              aria-label="Edit estimation"
-            >
-              <MaterialIcon name="edit" size={14} />
-              Edit
-            </Button>
-              </>
-            ) : null}
-            
-            {/* <Button
-              variant="outline"
-              className="!px-2 !py-1.5 !text-xs text-white border-red-600 hover:text-red-700 bg-red-600 hover:bg-white hover:text-red-600 "
-              onClick={() => setPendingDelete({ kind: 'table' })}
-              aria-label="Delete estimation"
-            >
-              <MaterialIcon name="delete" size={14}/>
-              Delete
-            </Button> */}
-          </>
+                variant="secondary"
+                className="!px-3 !py-1.5 !text-xs"
+                onClick={() => {
+                  const firstWithData = tabs.find((t) =>
+                    t.steps.some(isStepPopulated),
+                  )
+                  onEdit(
+                    estimation.id!,
+                    firstWithData?.entityId ?? tabs[0]?.entityId ?? '',
+                  )
+                }}
+                aria-label="Edit estimation"
+              >
+                <MaterialIcon name="edit" size={14} />
+                Edit
+              </Button>
+            </>
+          ) : null
         }
       />
 
@@ -454,6 +467,14 @@ function EstimationTableCard({  estimation,
               {populatedSteps.length}{' '}
               {populatedSteps.length === 1 ? 'Cost Item' : 'Cost Items'}
             </span>
+            <Button
+              variant="secondary"
+              className="!px-3 !py-1.5 !text-xs"
+              onClick={() => setAddingCostItems(true)}
+            >
+              <span className="text-base leading-none">+</span>
+              Add Cost Item
+            </Button>
           </div>
           {addingCostItems ? (
             <div className="mt-6 border-t border-portal-border pt-6">
@@ -465,11 +486,7 @@ function EstimationTableCard({  estimation,
                 entityCode={activeTab.entityCode}
                 minePhaseLimit={estimation.phaseLimit}
                 electrificationPercent={
-                  resolveElectrificationPercentForEntity(
-                    scopedEstimation.electrificationPercentByEntity ?? {},
-                    activeTab,
-                    tabs,
-                  )
+                  scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
                 }
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
@@ -486,11 +503,7 @@ function EstimationTableCard({  estimation,
           entityCode={activeTab.entityCode}
           minePhaseLimit={scopedEstimation.phaseLimit}
           electrificationPercent={
-            resolveElectrificationPercentForEntity(
-              scopedEstimation.electrificationPercentByEntity ?? {},
-              activeTab,
-              tabs,
-            )
+            scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
           }
           onSubmit={handleSaveSteps}
         />
@@ -505,36 +518,11 @@ function EstimationTableCard({  estimation,
         onConfirm={() => void handleConfirmDelete()}
       />
 
-      <Modal
-        open={Boolean(saveError)}
-        title={
-          saveError?.toLowerCase().includes('phase values must sum')
-            ? 'Phase amount mismatch'
-            : saveError?.toLowerCase().includes('electrification')
-              ? 'Design / electrification required'
-              : 'Unable to save'
-        }
-        onClose={() => setSaveError(null)}
-        backdropClassName="bg-black/30 backdrop-blur-sm"
-        className="max-w-md"
-        footer={
-          <Button variant="primary" onClick={() => setSaveError(null)}>
-            OK
-          </Button>
-        }
-      >
-        <div
-          className="flex items-start gap-3 text-sm text-portal-navy"
-          role="alert"
-        >
-          <MaterialIcon
-            name="warning"
-            size={24}
-            className="shrink-0 text-amber-500"
-          />
-          <p className="whitespace-pre-wrap">{saveError}</p>
-        </div>
-      </Modal>
+      {saveError ? (
+        <p className="mt-3 text-sm text-red-600" role="alert">
+          {saveError}
+        </p>
+      ) : null}
     </article>
   )
 }
@@ -568,32 +556,23 @@ export function CostItemsTable({
   onItemUpdated: (estimation: Estimation) => void
 }) {
   const saved = items.filter((e) => Boolean(e.id))
-  const nameKey = (mineName || '').trim().toLowerCase()
-  const mineScoped = mineId?.trim()
-    ? saved.filter(
-        (e) =>
-          e.id === mineId ||
-          e.mine_id === mineId ||
-          (nameKey
-            ? (e.siteSubtitle || '').trim().toLowerCase() === nameKey
-            : false),
-      )
+  const filtered = mineId
+    ? saved.filter((e) => e.mine_id === mineId || e.id === mineId)
     : saved
 
-  if (mineScoped.length === 0) {
+  if (filtered.length === 0) {
     return (
-      <div className="rounded-card bg-white px-6 py-10 text-center">
-        <p className="text-sm text-gray-500">
-          No submitted cost items yet for this mine. Click &quot;+ Add New Cost
-          Estimation&quot; to begin.
-        </p>
+      <div className="rounded-lg border border-dashed border-portal-border bg-white px-6 py-10 text-center text-sm text-gray-500">
+        {mineName
+          ? `No saved estimations for ${mineName} yet.`
+          : 'No saved estimations yet. Submit a form above to see it here.'}
       </div>
     )
   }
 
   return (
     <div>
-      {mineScoped.map((estimation) => (
+      {filtered.map((estimation) => (
         <EstimationTableCard
           key={estimation.id}
           estimation={estimation}
