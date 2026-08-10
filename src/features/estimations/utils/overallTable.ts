@@ -1,9 +1,11 @@
 import type { OverallCostItemDto, OverallEntityDto, OverallListData } from '../api/investments/types'
 import { compareEntityCodes } from '../constants/entityTabs'
 import { parsePhaseTypeCode } from '../phases/phaseTypes'
+import { resolvePhaseValue } from '../calculations/calculations'
 import {
   computeExternalAgentPayable,
   computeFullAgentPayable,
+  collectFilledPhaseCodes,
   contributorPhaseAmount,
   distributePaybackEqually,
   latestFilledPhaseAmong,
@@ -28,6 +30,12 @@ export type OverallTableRow = {
   unitCost?: number | null
   amount?: number | null
   phaseValues: Record<string, number | null>
+  /** Present on item rows when the source cost item id is known (entity table delete). */
+  costItemId?: string | null
+  /** Optional formula captions under phase values (e.g. Phase value × 20%). */
+  phaseFormulas?: Record<string, string | null>
+  /** Optional formula caption under the Amount cell. */
+  amountFormula?: string | null
 }
 
 function sortPhaseColumns(columns: string[]): string[] {
@@ -126,16 +134,30 @@ function pushPaybackRow(
   nextRows: OverallTableRow[],
   nextColumns: string[],
   payback: PaybackOverlayEntry,
+  phaseFormula?: string | null,
 ): void {
   const paybackPhaseValues: Record<string, number | null> = {}
+  const phaseFormulas: Record<string, string | null> = {}
   for (const column of nextColumns) {
-    paybackPhaseValues[column] = payback.phaseValues[column] ?? null
+    const value = payback.phaseValues[column] ?? null
+    paybackPhaseValues[column] = value
+    if (
+      phaseFormula &&
+      value != null &&
+      Number.isFinite(value) &&
+      value !== 0
+    ) {
+      phaseFormulas[column] = phaseFormula
+    }
   }
   nextRows.push({
     kind: 'design-charge',
     details: payback.details,
     amount: payback.amount,
     phaseValues: paybackPhaseValues,
+    amountFormula: 'Escalated remainder',
+    phaseFormulas:
+      Object.keys(phaseFormulas).length > 0 ? phaseFormulas : undefined,
   })
 }
 
@@ -308,6 +330,7 @@ function buildEntityRows(
       unitCost: item.unit_cost,
       amount: item.amount,
       phaseValues,
+      costItemId: item.cost_item_id ?? null,
     })
   })
 
@@ -400,8 +423,10 @@ export type PartialPaybackOverlayInput = {
 /**
  * Insert an equal-split external-agent payback row after each cost item.
  * Contributor phase cells show value × contribution% (not the raw entered amount).
- * Payback for every item in an entity starts after the top-most contributor
- * phase among that entity's cost items (shared start).
+ * Payback for every item in an entity starts after the top-most filled phase
+ * among that entity’s cost items (shared window), then spans the next
+ * `paybackPeriodYears` catalog phases capped by mine phaseLimit.
+ * Example: item A ends P6, item B ends P2 → both payback from after P6.
  * Design% on phases is folded into the single Design/electrification row
  * as (displayed Sub-Total + payback) × design%.
  */
@@ -463,7 +488,7 @@ export function withPartialPaybackOverlay(
 
     const sharedLast = sharedLastContributorByItem.get(index) ?? null
     const targets = nextPaybackPhaseCodes(
-      sharedLast ? [sharedLast] : [],
+      sharedLast ? [sharedLast] : collectFilledPhaseCodes(row.phaseValues),
       settings.paybackPeriodYears,
       settings.phaseLimit,
     )
@@ -486,20 +511,42 @@ export function withPartialPaybackOverlay(
   const nextRows: OverallTableRow[] = []
   rows.forEach((row, index) => {
     const phaseValues: Record<string, number | null> = {}
+    const phaseFormulas: Record<string, string | null> = {
+      ...(row.phaseFormulas ?? {}),
+    }
     for (const column of nextColumns) {
       const raw = row.phaseValues[column] ?? null
       if (rowKindShowsContributorShare(row.kind)) {
         phaseValues[column] =
           contributorPhaseAmount(raw, settings.contributionPercentage) ?? null
+        if (
+          row.kind === 'item' &&
+          raw != null &&
+          Number.isFinite(raw) &&
+          raw !== 0
+        ) {
+          phaseFormulas[column] =
+            `Phase value × ${settings.contributionPercentage}%`
+        }
       } else {
         phaseValues[column] = raw
       }
     }
-    nextRows.push({ ...row, phaseValues })
+    nextRows.push({ ...row, phaseValues, phaseFormulas })
 
     const payback = paybackAfterItem.get(index)
     if (!payback) return
-    pushPaybackRow(nextRows, nextColumns, payback)
+    const targetCount = Object.values(payback.phaseValues).filter(
+      (v) => v != null && Number.isFinite(v) && v !== 0,
+    ).length
+    pushPaybackRow(
+      nextRows,
+      nextColumns,
+      payback,
+      targetCount > 0
+        ? ``
+        : 'Escalated remainder',
+    )
   })
 
   return {
@@ -586,7 +633,15 @@ export function withFullPaybackOverlay(
 
     const payback = paybackAfterItem.get(index)
     if (!payback) return
-    pushPaybackRow(nextRows, nextColumns, payback)
+    const targetCount = Object.keys(payback.phaseValues).length
+    pushPaybackRow(
+      nextRows,
+      nextColumns,
+      payback,
+      targetCount > 0
+        ? `Amount ÷ ${targetCount} × (1 + ${settings.escalationPercent}%)`
+        : `Amount × (1 + ${settings.escalationPercent}%)`,
+    )
   })
 
   return {
@@ -597,5 +652,111 @@ export function withFullPaybackOverlay(
     ),
     phaseColumns: nextColumns,
     electrificationPercent,
+  }
+}
+
+/**
+ * Build Overall-sheet shaped data for a single entity tab so ECL/MDO tables
+ * use the same Sub-Total / Design / Total Amount layout as Overall.
+ */
+export function buildEntityOverallListData(params: {
+  steps: Array<{
+    id: string
+    details: string
+    manpower: number | null
+    qrts: number | null
+    unitCost: number | null
+    amount: number | null
+    phases: Array<{
+      phaseType: string
+      calculationMode: 'manual' | 'automatic'
+      value: number | null
+      percentage: number | null
+    }>
+  }>
+  entityCode: string
+  entityId: string
+  electrificationPercent: number | null
+  functionName: string
+  mineId: string
+  mineName: string
+}): OverallListData {
+  const costItems: OverallCostItemDto[] = params.steps.map((step) => {
+    const amount = step.amount ?? 0
+    const phases: Record<string, number> = {}
+    for (const phase of step.phases) {
+      if (!phase.phaseType) continue
+      phases[phase.phaseType] = resolvePhaseValue(phase, amount)
+    }
+    return {
+      name: step.details?.trim() || 'Untitled Cost Item',
+      manpower: step.manpower ?? 0,
+      qrts: step.qrts ?? 0,
+      unit_cost: step.unitCost ?? 0,
+      amount,
+      phases,
+      cost_item_id: step.id,
+    }
+  })
+
+  const total_manpower = costItems.reduce((sum, item) => sum + (item.manpower ?? 0), 0)
+  const total_qrts = costItems.reduce((sum, item) => sum + (item.qrts ?? 0), 0)
+  const total_amount = costItems.reduce((sum, item) => sum + (item.amount ?? 0), 0)
+  const pct =
+    params.electrificationPercent != null &&
+    Number.isFinite(params.electrificationPercent) &&
+    params.electrificationPercent >= 0
+      ? params.electrificationPercent
+      : 0
+  const design_amount = total_amount * (pct / 100)
+  const grand_total = total_amount + design_amount
+
+  const draftForColumns: OverallListData = {
+    mine_id: params.mineId,
+    mine_name: params.mineName,
+    function_name: params.functionName,
+    entities: [
+      {
+        entity_name: params.entityCode,
+        total_manpower,
+        total_qrts,
+        total_amount,
+        grand_total,
+        costItems,
+        phases: [],
+      },
+    ],
+    overall_grand_total: grand_total,
+    overall_phase_totals: [],
+  }
+  const phaseColumns = collectOverallPhaseColumns(draftForColumns)
+  const phaseTotals = sumItemPhases(costItems, phaseColumns)
+  const entityPhases = phaseColumns.map((phase_name) => ({
+    phase_name,
+    total_value: phaseTotals[phase_name] ?? 0,
+  }))
+
+  return {
+    mine_id: params.mineId,
+    mine_name: params.mineName,
+    function_name: params.functionName,
+    electrification_percent: params.electrificationPercent,
+    entities: [
+      {
+        entity_id: params.entityId,
+        entity_name: params.entityCode,
+        total_manpower,
+        total_qrts,
+        total_amount,
+        design_percent: design_amount,
+        design_amount,
+        grand_total,
+        percentage: params.electrificationPercent,
+        phases: entityPhases,
+        costItems,
+      },
+    ],
+    overall_grand_total: grand_total,
+    overall_phase_totals: entityPhases,
   }
 }

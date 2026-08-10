@@ -84,7 +84,7 @@ export type EstimationAction =
       entityId: string
       percent: number | null
     }
-  | { type: 'ADD_PHASE'; blockId: string; entityId: string; stepId: string }
+  | { type: 'ADD_PHASE'; blockId: string; entityId: string; stepId: string; count?: number }
   | { type: 'REMOVE_PHASE'; blockId: string; entityId: string; stepId: string; phaseId: string }
   | {
       type: 'UPDATE_PHASE'
@@ -438,8 +438,11 @@ export function estimationReducer(
         const limit = state.estimation.phaseLimit ?? step.phaseLimit
         if (limit == null) return
         step.phaseLimit = limit
-        // Never exceed the mine max, even if a batch would overshoot.
-        const count = nextPhaseBatchCount(step.phases.length, limit)
+        const batch = nextPhaseBatchCount(step.phases.length, limit)
+        const count =
+          action.count != null && Number.isFinite(action.count)
+            ? Math.min(batch, Math.max(0, Math.floor(action.count)))
+            : batch
         if (count <= 0) return
         step.phases = clampPhasesToLimit(
           appendTypedPhaseBatch(step.phases, count, createEmptyPhase),
@@ -464,7 +467,10 @@ export function estimationReducer(
           Object.keys(action.patch).map(
             (field) =>
               `${action.blockId}.${action.entityId}.${action.stepId}.${action.phaseId}.${field}`,
-          ).concat(`${action.blockId}.${action.entityId}.${action.stepId}.phaseAmountSum`),
+          ).concat(
+            `${action.blockId}.${action.entityId}.${action.stepId}.phaseAmountSum`,
+            `${action.blockId}.${action.entityId}.${action.stepId}.paybackRoom`,
+          ),
         ),
       }
     case 'SET_PHASE_PAGE':

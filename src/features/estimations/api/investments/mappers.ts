@@ -9,6 +9,7 @@ import {
 import { compareEntityCodes } from '../../constants/entityTabs'
 import { getEntities } from '../master'
 import { generateUuid } from '../../utils/uuid'
+import { resolvePhaseId } from '../phases'
 import {
   applyMinePhaseLimitToBlocks,
   asUuidOrNull,
@@ -247,7 +248,11 @@ function inferPhaseLimitFromSteps(blocks: Estimation['blocks']): number | null {
   return max > 0 ? max : null
 }
 
-export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'update') {
+export function mapEstimationToDto(
+  estimation: Estimation,
+  mode: MapMode = 'update',
+  phaseIdByName: Map<string, string>,
+) {
   if (mode === 'update' && !estimation.mine_id) {
     throw new Error('Estimation is missing mine_id')
   }
@@ -302,9 +307,10 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
           ).map((phase) => {
             const calculation_mode =
               phase.calculationMode === 'automatic' ? 'calculated' : 'manual'
+            const phase_id = resolvePhaseId(phase.phaseType || '', phaseIdByName)
             if (calculation_mode === 'manual') {
               return {
-                phase_name: phase.phaseType,
+                phase_id,
                 value: dtoNumber(phase.value),
                 calculation_mode,
               }
@@ -312,7 +318,7 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
             const hasPercentage =
               phase.percentage != null && !Number.isNaN(phase.percentage)
             return {
-              phase_name: phase.phaseType,
+              phase_id,
               value: hasPercentage ? dtoNumber(phase.value) : 0,
               calculation_mode,
               percentage: hasPercentage ? Number(phase.percentage) : 0,
@@ -327,7 +333,10 @@ export function mapEstimationToDto(estimation: Estimation, mode: MapMode = 'upda
   })
 
   if (mode === 'create') {
+    // Include mine_id when appending cost items to an existing mine (Nest create).
+    const mine_id = asUuidOrNull(estimation.mine_id)
     return {
+      ...(mine_id ? { mine_id } : {}),
       mine_name,
       function_master_id,
       function_name,

@@ -2,6 +2,11 @@ import { phaseValuesSumToAmount, resolvePhaseValue } from '../calculations/calcu
 import { formatAmount } from './formatAmount'
 import { DEFAULT_INITIAL_PHASE_COUNT } from '../phases/phaseTypes'
 import { isStepPopulated } from '../api/investments/domain'
+import {
+  hasInsufficientPaybackRoom,
+  insufficientPaybackRoomMessage,
+} from '@/features/projects/partialContribution'
+import { phaseTypeIndex } from '../phases/phaseTypes'
 import type { Estimation, EstimationBlock, FieldErrors, Phase, Step } from '../types/estimation'
 
 function stepKey(blockId: string, entityId: string, stepId: string, field: string) {
@@ -17,6 +22,47 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
 }
 
 /**
+ * Design / electrification is shown only after at least one phase block exists
+ * on any cost item (empty blocks count). Full outsourcing: amount + payback
+ * settings count as phases, since payback rows are display-only until stamp.
+ */
+export function hasAnyPhaseBlock(
+  steps: Step[],
+  options?: {
+    phaseValidationMode?: PhaseValidationMode
+    fullOutsourcing?: {
+      paybackStartPhase?: string | null
+      paybackPeriodYears?: number | null
+      escalationPercent?: number | null
+    } | null
+  },
+): boolean {
+  if (steps.some((step) => step.phases.length > 0)) return true
+
+  const mode = options?.phaseValidationMode
+  const full = options?.fullOutsourcing
+  const isFull = mode === 'full' || full != null
+  if (!isFull) return false
+
+  const start = full?.paybackStartPhase?.trim() ?? ''
+  const years = Number(full?.paybackPeriodYears)
+  const escalation = Number(full?.escalationPercent)
+  const settingsOk =
+    full == null
+      ? true
+      : Boolean(start) &&
+        Number.isFinite(years) &&
+        years > 0 &&
+        Number.isFinite(escalation) &&
+        escalation >= 0
+  if (!settingsOk) return false
+
+  return steps.some(
+    (step) => step.amount != null && Number.isFinite(step.amount),
+  )
+}
+
+/**
  * Ownership (`strict`) and Partial: filled origin phase values must sum to Amount
  * (Partial: before contribution%; contributor readout is display-only).
  * Full: no phase entry required.
@@ -26,6 +72,8 @@ export type PhaseValidationMode = 'strict' | 'partial' | 'full' | 'adhoc'
 
 export type EstimationValidationOptions = {
   phaseValidationMode?: PhaseValidationMode
+  /** Partial: years of payback after last filled phase (blocks submit if no room). */
+  paybackPeriodYears?: number | null
   /** @deprecated Prefer phaseValidationMode: 'full' */
   skipPhaseAmountValidation?: boolean
 }
@@ -36,6 +84,28 @@ function resolvePhaseValidationMode(
   if (options?.phaseValidationMode) return options.phaseValidationMode
   if (options?.skipPhaseAmountValidation) return 'full'
   return 'strict'
+}
+
+/** Catalog codes for phases the user has entered (Partial payback start). */
+export function filledPhaseCodesFromStep(step: Step): string[] {
+  return step.phases
+    .filter((phase) => phaseHasEnteredValue(phase) && phase.phaseType)
+    .map((phase) => phase.phaseType as string)
+}
+
+/** Latest filled phase row (by catalog order), used to attach payback-room field errors. */
+export function latestFilledPhase(step: Step): Phase | null {
+  let best: Phase | null = null
+  let bestIdx = -1
+  for (const phase of step.phases) {
+    if (!phaseHasEnteredValue(phase) || !phase.phaseType) continue
+    const idx = phaseTypeIndex(phase.phaseType)
+    if (idx != null && idx > bestIdx) {
+      bestIdx = idx
+      best = phase
+    }
+  }
+  return best
 }
 
 /** Populated cost items need at least one phase with a value; filled phases must sum to Amount (strict / partial). */
@@ -67,6 +137,34 @@ export function phaseAmountSumError(
   return `Phase values must sum to Amount (${formatAmount(step.amount ?? 0)}); current sum is ${formatAmount(sum)}`
 }
 
+/** Partial: last filled phase must leave enough slots under mine limit for payback years. */
+export function phasePaybackRoomError(
+  step: Step,
+  minePhaseLimit: number | null | undefined,
+  paybackPeriodYears: number | null | undefined,
+): string | null {
+  const limit = minePhaseLimit ?? step.phaseLimit
+  if (
+    limit == null ||
+    paybackPeriodYears == null ||
+    !Number.isFinite(paybackPeriodYears) ||
+    paybackPeriodYears <= 0
+  ) {
+    return null
+  }
+  const filled = filledPhaseCodesFromStep(step)
+  if (
+    !hasInsufficientPaybackRoom({
+      filledPhaseCodes: filled,
+      phaseLimit: limit,
+      paybackPeriodYears,
+    })
+  ) {
+    return null
+  }
+  return insufficientPaybackRoomMessage(limit, paybackPeriodYears)
+}
+
 export function validateStep(
   step: Step,
   errors: FieldErrors,
@@ -93,10 +191,28 @@ export function validateStep(
     errors[stepKey(blockId, entityId, step.id, 'phaseLimit')] =
       `This cost item has ${step.phases.length} phases; maximum allowed is ${limit}`
   }
+  const mode = resolvePhaseValidationMode(options)
   if (isStepPopulated(step)) {
-    const sumError = phaseAmountSumError(step, resolvePhaseValidationMode(options))
+    const sumError = phaseAmountSumError(step, mode)
     if (sumError) {
       errors[stepKey(blockId, entityId, step.id, 'phaseAmountSum')] = sumError
+    }
+  }
+  if (mode === 'partial') {
+    const roomError = phasePaybackRoomError(
+      step,
+      minePhaseLimit,
+      options?.paybackPeriodYears,
+    )
+    if (roomError) {
+      errors[stepKey(blockId, entityId, step.id, 'paybackRoom')] = roomError
+      const late = latestFilledPhase(step)
+      if (late) {
+        const field =
+          late.calculationMode === 'automatic' ? 'percentage' : 'value'
+        errors[stepKey(blockId, entityId, step.id, `${late.id}.${field}`)] =
+          roomError
+      }
     }
   }
 }
@@ -113,13 +229,25 @@ export function validateBlock(
   if (!block.activeEntityId && block.entityTabs.length > 0) {
     errors[`${block.id}.activeEntityId`] = 'Select an entity'
   }
-  const activeTab = block.entityTabs.find((t) => t.entityId === block.activeEntityId)
-  if (activeTab) {
-    if (activeTab.steps.length === 0) {
-      errors[`${block.id}.${activeTab.entityId}.steps`] = 'Add at least one step'
+  if (block.entityTabs.length === 0) return
+
+  // Validate every entity that has cost-item data — not only the active tab.
+  // Otherwise MDO phase / amount errors never reach the submit popup when ECL
+  // is active (or when activeEntityId is reset to ECL after id remapping).
+  const tabsToValidate = block.entityTabs.filter((tab) =>
+    tab.steps.some(isStepPopulated),
+  )
+  const targets =
+    tabsToValidate.length > 0
+      ? tabsToValidate
+      : block.entityTabs.filter((tab) => tab.entityId === block.activeEntityId)
+
+  for (const tab of targets) {
+    if (tab.steps.length === 0) {
+      errors[`${block.id}.${tab.entityId}.steps`] = 'Add at least one step'
     }
-    for (const step of activeTab.steps) {
-      validateStep(step, errors, block.id, activeTab.entityId, minePhaseLimit, options)
+    for (const step of tab.steps) {
+      validateStep(step, errors, block.id, tab.entityId, minePhaseLimit, options)
     }
   }
 }
@@ -138,21 +266,19 @@ export function validateEstimation(
   }
 
   const percentByEntity = estimation.electrificationPercentByEntity ?? {}
+  const phaseMode = resolvePhaseValidationMode(options)
   for (const block of estimation.blocks) {
     for (const tab of block.entityTabs) {
       if (!tab.steps.some(isStepPopulated)) continue
-      const percent =
-        percentByEntity[tab.entityId] ??
-        // Fallback if percent was stored under a sibling tab id for the same entity code
-        Object.entries(percentByEntity).find(([key]) => {
-          if (key === tab.entityId) return true
-          const sibling = block.entityTabs.find((t) => t.entityId === key)
-          return (
-            sibling != null &&
-            sibling.entityCode.trim().toLowerCase() ===
-              tab.entityCode.trim().toLowerCase()
-          )
-        })?.[1]
+      // No phase blocks → Design % is hidden and not required.
+      if (!hasAnyPhaseBlock(tab.steps, { phaseValidationMode: phaseMode })) {
+        continue
+      }
+      const percent = resolveElectrificationPercentForEntity(
+        percentByEntity,
+        tab,
+        block.entityTabs,
+      )
       if (percent == null || !Number.isFinite(percent) || percent < 0) {
         errors[`electrificationPercent.${tab.entityId}`] =
           `Design / electrification percent is required for ${tab.entityCode}`
@@ -167,6 +293,39 @@ export function validateEstimation(
     validateBlock(block, errors, estimation.phaseLimit, options)
   }
   return errors
+}
+
+/** Resolve design % by entity id, remapped uuid, or same entity code. */
+export function resolveElectrificationPercentForEntity(
+  percentByEntity: Record<string, number>,
+  tab: { entityId: string; entityCode: string },
+  siblings: Array<{ entityId: string; entityCode: string }> = [],
+): number | null {
+  const direct = percentByEntity[tab.entityId]
+  if (direct != null && Number.isFinite(direct) && direct >= 0) return direct
+
+  const code = tab.entityCode.trim().toLowerCase()
+  if (!code) return null
+
+  for (const [key, value] of Object.entries(percentByEntity)) {
+    if (value == null || !Number.isFinite(value) || value < 0) continue
+    if (key === tab.entityId) return value
+    const sibling = siblings.find((t) => t.entityId === key)
+    if (
+      sibling &&
+      sibling.entityCode.trim().toLowerCase() === code
+    ) {
+      return value
+    }
+  }
+
+  // Percent keyed under a legacy stub id (ecl/mdo) after the tab became a UUID.
+  for (const [key, value] of Object.entries(percentByEntity)) {
+    if (value == null || !Number.isFinite(value) || value < 0) continue
+    if (key.trim().toLowerCase() === code) return value
+  }
+
+  return null
 }
 
 export function isValid(errors: FieldErrors): boolean {

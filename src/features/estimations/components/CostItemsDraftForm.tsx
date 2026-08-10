@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { Button } from '@/shared/components/ui/Button'
+import { Modal } from '@/shared/components/ui/Modal'
+import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { StepDetailsRow } from './StepDetailsRow'
 import { PhaseGrid } from './PhaseGrid'
 import { CardFooter } from './FormFooter'
@@ -12,7 +15,7 @@ import {
   clampPhasesToLimit,
   nextPhaseBatchCount,
 } from '../phases/phaseTypes'
-import { isValid, validateStep } from '../utils/validation'
+import { isValid, hasAnyPhaseBlock, validateStep } from '../utils/validation'
 import { useToast } from '../context/ToastContext'
 import {
   isAdhocOutsourcing,
@@ -20,7 +23,9 @@ import {
   isPartialOutsourcing,
   useOutsourcingPartial,
 } from '@/features/projects/OutsourcingPartialContext'
+import { stampFullPaybackPhasesOnStep } from '@/features/projects/partialContribution'
 import type { FieldErrors, PhaseTypeMaster, Step } from '../types/estimation'
+import { createId } from '../utils/factories'
 
 function recomputeStep(step: Step): Step {
   if (step.amountMode === 'manual') return step
@@ -131,11 +136,23 @@ export function CostItemsDraftForm({
   // Always start blank — do not copy a previously saved entity %.
   // On submit, fall back to a saved entity % only if the field is left empty.
   const [percent, setPercent] = useState<number | null>(null)
+  const [validationPopup, setValidationPopup] = useState<string | null>(null)
   const [pendingRemove, setPendingRemove] = useState<{
     stepId: string
     stepNumber: number
     details: string
   } | null>(null)
+
+  const showElectrificationInput = hasAnyPhaseBlock(steps, {
+    phaseValidationMode,
+    fullOutsourcing: isFullOutsourcing(outsourcing)
+      ? {
+          paybackStartPhase: outsourcing.paybackStartPhase,
+          paybackPeriodYears: outsourcing.paybackPeriodYears,
+          escalationPercent: outsourcing.escalationPercent,
+        }
+      : null,
+  })
 
   const [prevEntityId, setPrevEntityId] = useState(entityId)
   if (entityId !== prevEntityId) {
@@ -162,11 +179,28 @@ export function CostItemsDraftForm({
   }
 
   async function handleSubmit() {
-    const prepared = steps.map(recomputeStep)
+    let prepared = steps.map(recomputeStep)
+    if (isFullOutsourcing(outsourcing)) {
+      prepared = prepared.map((step) =>
+        stampFullPaybackPhasesOnStep(
+          step,
+          {
+            escalationPercent: outsourcing.escalationPercent,
+            paybackPeriodYears: outsourcing.paybackPeriodYears,
+            paybackStartPhase: outsourcing.paybackStartPhase,
+            phaseLimit: minePhaseLimit,
+          },
+          () => createId('ph'),
+        ),
+      )
+    }
     const nextErrors: FieldErrors = {}
     for (const step of prepared) {
       validateStep(step, nextErrors, blockId, entityId, minePhaseLimit, {
         phaseValidationMode,
+        paybackPeriodYears: isPartialOutsourcing(outsourcing)
+          ? outsourcing.paybackPeriodYears
+          : null,
       })
     }
     const savedPercent =
@@ -177,13 +211,42 @@ export function CostItemsDraftForm({
       percent != null && Number.isFinite(percent) && percent >= 0
         ? percent
         : savedPercent
-    if (effectivePercent == null || effectivePercent < 0) {
+    if (
+      hasAnyPhaseBlock(prepared, {
+        phaseValidationMode,
+        fullOutsourcing: isFullOutsourcing(outsourcing)
+          ? {
+              paybackStartPhase: outsourcing.paybackStartPhase,
+              paybackPeriodYears: outsourcing.paybackPeriodYears,
+              escalationPercent: outsourcing.escalationPercent,
+            }
+          : null,
+      }) &&
+      (effectivePercent == null || effectivePercent < 0)
+    ) {
       nextErrors[`electrificationPercent.${entityId}`] =
         `Design / electrification percent is required for ${entityCode ?? 'this entity'}`
     }
     setErrors(nextErrors)
-    if (!isValid(nextErrors)) return
-
+    if (!isValid(nextErrors)) {
+      const sumMessages = Object.entries(nextErrors)
+        .filter(
+          ([key]) =>
+            key.endsWith('.phaseAmountSum') ||
+            key === 'phaseAmountSum' ||
+            key.endsWith('.paybackRoom'),
+        )
+        .map(([, message]) => message)
+      const percentMessages = Object.entries(nextErrors)
+        .filter(([key]) => key.startsWith('electrificationPercent.'))
+        .map(([, message]) => message)
+      const messages = [...percentMessages, ...sumMessages]
+      if (messages.length > 0) {
+        setValidationPopup(messages.join('\n'))
+      }
+      return
+    }
+    setValidationPopup(null)
     setSaving(true)
     try {
       await onSubmit(prepared, effectivePercent)
@@ -317,21 +380,23 @@ export function CostItemsDraftForm({
                       clearErrors(prev, [
                         ...Object.keys(patch).map((field) => `${errorPrefix}.${phaseId}.${field}`),
                         `${errorPrefix}.phaseAmountSum`,
+                        `${errorPrefix}.paybackRoom`,
                       ]),
                     )
                   }}
-                  onAddPhase={() =>
+                  onAddPhase={(count) =>
                     setSteps((prev) =>
                       updateStep(prev, step.id, (s) => {
                         const limit = minePhaseLimit ?? s.phaseLimit
                         if (limit == null) return s
-                        const count = nextPhaseBatchCount(s.phases.length, limit)
-                        if (count <= 0) return s
+                        const batch = nextPhaseBatchCount(s.phases.length, limit)
+                        const add = Math.min(batch, Math.max(0, Math.floor(count)))
+                        if (add <= 0) return s
                         return {
                           ...s,
                           phaseLimit: limit,
                           phases: clampPhasesToLimit(
-                            appendTypedPhaseBatch(s.phases, count, createEmptyPhase),
+                            appendTypedPhaseBatch(s.phases, add, createEmptyPhase),
                             limit,
                           ),
                         }
@@ -352,15 +417,17 @@ export function CostItemsDraftForm({
           )
         })}
       </div>
-      <ElectrificationPercentInput
-        value={percent}
-        entityCode={entityCode}
-        error={errors[`electrificationPercent.${entityId}`]}
-        onChange={(value) => {
-          setPercent(value)
-          setErrors((prev) => clearErrors(prev, [`electrificationPercent.${entityId}`]))
-        }}
-      />
+      {showElectrificationInput ? (
+        <ElectrificationPercentInput
+          value={percent}
+          entityCode={entityCode}
+          error={errors[`electrificationPercent.${entityId}`]}
+          onChange={(value) => {
+            setPercent(value)
+            setErrors((prev) => clearErrors(prev, [`electrificationPercent.${entityId}`]))
+          }}
+        />
+      ) : null}
 
       <CardFooter
         stepCount={steps.length}
@@ -397,6 +464,35 @@ export function CostItemsDraftForm({
         onCancel={() => setPendingRemove(null)}
         onConfirm={handleConfirmRemove}
       />
+
+      <Modal
+        open={Boolean(validationPopup)}
+        title={
+          validationPopup?.toLowerCase().includes('phase values must sum')
+            ? 'Phase amount mismatch'
+            : 'Unable to save cost item'
+        }
+        onClose={() => setValidationPopup(null)}
+        backdropClassName="bg-black/30 backdrop-blur-sm"
+        className="max-w-md"
+        footer={
+          <Button variant="primary" onClick={() => setValidationPopup(null)}>
+            OK
+          </Button>
+        }
+      >
+        <div
+          className="flex items-start gap-3 text-sm text-portal-navy"
+          role="alert"
+        >
+          <MaterialIcon
+            name="warning"
+            size={24}
+            className="shrink-0 text-amber-500"
+          />
+          <p className="whitespace-pre-wrap">{validationPopup}</p>
+        </div>
+      </Modal>
     </div>
   )
 }

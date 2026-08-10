@@ -6,7 +6,9 @@ export type InvestmentInputDto = {
 }
 
 export type InvestmentPhasingDto = {
-  phase_name: string
+  /** Present on some read/list responses; outbound create/update must use phase_id. */
+  phase_name?: string
+  phase_id?: string
   value: number
   calculation_mode: 'manual' | 'calculated'
   percentage?: number | null

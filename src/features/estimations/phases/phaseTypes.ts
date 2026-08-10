@@ -61,12 +61,31 @@ export function phaseTypeAtIndex(index: number): PhaseTypeCode {
 
 /** Zero-based catalog index for a phase code (C1→0, C2→1, P1→2, …). */
 export function phaseTypeIndex(code: string): number | null {
-  const trimmed = code.trim()
+  const trimmed = normalizeCatalogPhaseCode(code)
+  if (!trimmed) return null
   if (trimmed === 'C1') return 0
   if (trimmed === 'C2') return 1
   const match = trimmed.match(/^P(\d+)$/)
   if (!match) return null
   return Number(match[1]) + 1
+}
+
+/**
+ * Map Nest/API phase labels or UUIDs-as-names to catalog codes (C1, P1, …).
+ * Accepts "P1", "p1", "Phase P1", etc. Returns null when no catalog code is found.
+ */
+export function normalizeCatalogPhaseCode(
+  raw: string | null | undefined,
+): PhaseTypeCode | null {
+  if (raw == null) return null
+  const trimmed = String(raw).trim()
+  if (!trimmed) return null
+  if (/^[CP]\d+$/i.test(trimmed)) {
+    return trimmed.toUpperCase() as PhaseTypeCode
+  }
+  const embedded = trimmed.match(/\b([CP]\d+)\b/i)
+  if (embedded) return embedded[1].toUpperCase() as PhaseTypeCode
+  return null
 }
 
 /**
