@@ -42,6 +42,7 @@ export {
   addCostItemsToEstimation,
   apiErrorMessage,
   assertApiSuccess,
+  buildExcelDownloadPayload,
   createEstimation,
   createMineYear,
   deleteEstimation,
@@ -53,6 +54,10 @@ export {
   listEstimations,
   removeCostItemFromEstimation,
   updateEstimation,
+} from './service'
+export type {
+  ExcelDownloadInput,
+  ExcelDownloadPayload,
 } from './service'
 
 export {
