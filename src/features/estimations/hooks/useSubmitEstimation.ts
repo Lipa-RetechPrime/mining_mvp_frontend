@@ -111,7 +111,9 @@ export function useSubmitEstimation(options?: {
         : await updateEstimation(prepared.mine_id || prepared.id!, prepared, {
             phaseValidationMode,
             paybackPeriodYears: options?.paybackPeriodYears,
-            skipPhaseAmountValidation: phaseValidationMode === "full",
+            skipPhaseAmountValidation:
+              phaseValidationMode === "full" ||
+              phaseValidationMode === "adhoc",
           });
       // Keep peer cost-function blocks in memory (save responses are scoped).
       const savedFunctionIds = new Set(

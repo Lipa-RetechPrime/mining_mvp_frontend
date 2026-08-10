@@ -22,6 +22,7 @@ import type { Estimation, PhaseTypeMaster, Step } from '../types/estimation'
 import { buildEntityOverallListData } from '../utils/overallTable'
 import { resolveElectrificationPercentForEntity } from '../utils/validation'
 import {
+  isAdhocOutsourcing,
   isFullOutsourcing,
   isPartialOutsourcing,
   useOutsourcingPartial,
@@ -236,9 +237,11 @@ function EstimationTableCard({
       }
       const phaseValidationMode = isFullOutsourcing(outsourcing)
         ? 'full'
-        : isPartialOutsourcing(outsourcing)
-          ? 'partial'
-          : 'strict'
+        : isAdhocOutsourcing(outsourcing)
+          ? 'adhoc'
+          : isPartialOutsourcing(outsourcing)
+            ? 'partial'
+            : 'strict'
       let stepsForSave = steps
       if (isFullOutsourcing(outsourcing)) {
         stepsForSave = steps.map((step) =>
@@ -467,14 +470,14 @@ function EstimationTableCard({
               {populatedSteps.length}{' '}
               {populatedSteps.length === 1 ? 'Cost Item' : 'Cost Items'}
             </span>
-            <Button
+            {/* <Button
               variant="secondary"
               className="!px-3 !py-1.5 !text-xs"
               onClick={() => setAddingCostItems(true)}
             >
               <span className="text-base leading-none">+</span>
               Add Cost Item
-            </Button>
+            </Button> */}
           </div>
           {addingCostItems ? (
             <div className="mt-6 border-t border-portal-border pt-6">
@@ -485,9 +488,6 @@ function EstimationTableCard({
                 entityId={activeTab.entityId}
                 entityCode={activeTab.entityCode}
                 minePhaseLimit={estimation.phaseLimit}
-                electrificationPercent={
-                  scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
-                }
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
               />
@@ -502,9 +502,6 @@ function EstimationTableCard({
           entityId={activeTab.entityId}
           entityCode={activeTab.entityCode}
           minePhaseLimit={scopedEstimation.phaseLimit}
-          electrificationPercent={
-            scopedEstimation.electrificationPercentByEntity?.[activeTab.entityId]
-          }
           onSubmit={handleSaveSteps}
         />
       ) : null}

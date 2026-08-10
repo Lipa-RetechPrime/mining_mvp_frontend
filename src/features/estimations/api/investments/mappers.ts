@@ -463,6 +463,9 @@ export function mapDtoToEstimation(dto: InvestmentDto): Estimation {
 /**
  * Keep peer FIT cost items on update. The editor is scoped to one OW/PO/FO/AH id;
  * without merging, a full-replace PUT would delete the other types' items.
+ * Not wired into the save path: Nest DTOs reject per-item FIT fields, so peers
+ * would be restamped as the active FIT. Prefer Nest FIT-scoped deletes instead.
+ * @internal Kept for reference / emergency local experiments.
  */
 export function mergePreservedFitSteps(
   editor: Estimation,

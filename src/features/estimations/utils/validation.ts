@@ -113,6 +113,7 @@ export function phaseAmountSumError(
   step: Step,
   mode: PhaseValidationMode = 'strict',
 ): string | null {
+  // Full: phases are stamped; no sum/entry checks here.
   if (mode === 'full') return null
 
   const filled = step.phases.filter(phaseHasEnteredValue)
@@ -125,7 +126,7 @@ export function phaseAmountSumError(
     return 'Enter a value in at least one phase.'
   }
 
-  // Adhoc: enter phase values freely; do not require sum to Amount.
+  // Adhoc: free-form phase values; never require sum to Amount.
   if (mode === 'adhoc') return null
 
   // Ownership + Partial: origin phase values (manual value or Amount × %) must equal Amount.
