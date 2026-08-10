@@ -771,22 +771,66 @@ async function readDownloadErrorMessage(error: unknown): Promise<string> {
   return 'Failed to download Excel. Please try again.'
 }
 
-export async function downloadEstimationExcel(mineId: string): Promise<void> {
-  if (!mineId) {
-    throw new Error('Estimation is missing mine_id')
+/**
+ * Excel download body — matches Nest Swagger `POST /excel/download`.
+ */
+export type ExcelDownloadPayload = {
+  mine_id: string
+  function_master_id: string
+  function_investment_type_id: string
+}
+
+export type ExcelDownloadInput = {
+  mineId: string
+  functionMasterId: string
+  functionInvestmentTypeId?: string | null
+}
+
+export function buildExcelDownloadPayload(
+  input: ExcelDownloadInput,
+): ExcelDownloadPayload {
+  const mine_id = asUuidOrNull(input.mineId)
+  if (!mine_id) {
+    throw new Error('Estimation is missing a valid mine_id')
   }
+  const function_master_id = asUuidOrNull(input.functionMasterId)
+  if (!function_master_id) {
+    throw new Error(
+      'Select a cost function (valid function_master_id) before downloading Excel.',
+    )
+  }
+  const function_investment_type_id = asUuidOrNull(
+    input.functionInvestmentTypeId ?? '',
+  )
+  if (!function_investment_type_id) {
+    throw new Error(
+      'Select Ownership or save Outsourcing configuration before downloading Excel.',
+    )
+  }
+
+  return {
+    mine_id,
+    function_master_id,
+    function_investment_type_id,
+  }
+}
+
+export async function downloadEstimationExcel(
+  input: ExcelDownloadInput,
+): Promise<void> {
+  const payload = buildExcelDownloadPayload(input)
   try {
     const { blob, headers } = await fetchBlobFromBackend(
       ENDPOINTS.investments.downloadExcel,
       {
         method: 'POST',
-        json: { mine_id: mineId },
+        json: payload,
       },
     )
 
     const filename =
       filenameFromContentDisposition(headers.get('content-disposition') ?? undefined) ||
-      `investment-${mineId}.xlsx`
+      `investment-${payload.mine_id}.xlsx`
 
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')

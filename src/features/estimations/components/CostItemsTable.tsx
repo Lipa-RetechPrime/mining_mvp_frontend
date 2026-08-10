@@ -325,10 +325,29 @@ function EstimationTableCard({
       setSaveError('Cannot download: estimation is missing mine_id.')
       return
     }
+    if (!functionMasterId) {
+      setSaveError('Select a cost function before downloading Excel.')
+      return
+    }
+    const fitId =
+      asUuidOrNull(functionInvestmentTypeId) ||
+      asUuidOrNull(scopedEstimation.functionInvestmentTypeId) ||
+      asUuidOrNull(outsourcing?.functionInvestmentTypeId) ||
+      asUuidOrNull(estimation.functionInvestmentTypeId)
+    if (!fitId) {
+      setSaveError(
+        'Select Ownership or save Outsourcing configuration before downloading Excel.',
+      )
+      return
+    }
     setDownloading(true)
     setSaveError(null)
     try {
-      await downloadEstimationExcel(estimation.mine_id)
+      await downloadEstimationExcel({
+        mineId: estimation.mine_id,
+        functionMasterId,
+        functionInvestmentTypeId: fitId,
+      })
     } catch (error) {
       setSaveError(
         error instanceof Error ? error.message : 'Failed to download Excel. Please try again.',
