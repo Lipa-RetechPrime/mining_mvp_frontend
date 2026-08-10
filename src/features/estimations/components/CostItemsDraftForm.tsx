@@ -15,7 +15,7 @@ import {
   clampPhasesToLimit,
   nextPhaseBatchCount,
 } from '../phases/phaseTypes'
-import { isValid, validateStep } from '../utils/validation'
+import { isValid, hasAnyPhaseBlock, validateStep } from '../utils/validation'
 import { useToast } from '../context/ToastContext'
 import {
   isAdhocOutsourcing,
@@ -143,6 +143,17 @@ export function CostItemsDraftForm({
     details: string
   } | null>(null)
 
+  const showElectrificationInput = hasAnyPhaseBlock(steps, {
+    phaseValidationMode,
+    fullOutsourcing: isFullOutsourcing(outsourcing)
+      ? {
+          paybackStartPhase: outsourcing.paybackStartPhase,
+          paybackPeriodYears: outsourcing.paybackPeriodYears,
+          escalationPercent: outsourcing.escalationPercent,
+        }
+      : null,
+  })
+
   const [prevEntityId, setPrevEntityId] = useState(entityId)
   if (entityId !== prevEntityId) {
     setPrevEntityId(entityId)
@@ -200,7 +211,19 @@ export function CostItemsDraftForm({
       percent != null && Number.isFinite(percent) && percent >= 0
         ? percent
         : savedPercent
-    if (effectivePercent == null || effectivePercent < 0) {
+    if (
+      hasAnyPhaseBlock(prepared, {
+        phaseValidationMode,
+        fullOutsourcing: isFullOutsourcing(outsourcing)
+          ? {
+              paybackStartPhase: outsourcing.paybackStartPhase,
+              paybackPeriodYears: outsourcing.paybackPeriodYears,
+              escalationPercent: outsourcing.escalationPercent,
+            }
+          : null,
+      }) &&
+      (effectivePercent == null || effectivePercent < 0)
+    ) {
       nextErrors[`electrificationPercent.${entityId}`] =
         `Design / electrification percent is required for ${entityCode ?? 'this entity'}`
     }
@@ -394,15 +417,17 @@ export function CostItemsDraftForm({
           )
         })}
       </div>
-      <ElectrificationPercentInput
-        value={percent}
-        entityCode={entityCode}
-        error={errors[`electrificationPercent.${entityId}`]}
-        onChange={(value) => {
-          setPercent(value)
-          setErrors((prev) => clearErrors(prev, [`electrificationPercent.${entityId}`]))
-        }}
-      />
+      {showElectrificationInput ? (
+        <ElectrificationPercentInput
+          value={percent}
+          entityCode={entityCode}
+          error={errors[`electrificationPercent.${entityId}`]}
+          onChange={(value) => {
+            setPercent(value)
+            setErrors((prev) => clearErrors(prev, [`electrificationPercent.${entityId}`]))
+          }}
+        />
+      ) : null}
 
       <CardFooter
         stepCount={steps.length}

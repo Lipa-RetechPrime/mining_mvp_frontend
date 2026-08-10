@@ -10,6 +10,13 @@ import { CardFooter } from './FormFooter'
 import { isStepPopulated } from '../api/investments'
 import { useEstimationDispatch, useEstimationState } from '../context/EstimationContext'
 import { useToast } from '../context/ToastContext'
+import { hasAnyPhaseBlock } from '../utils/validation'
+import {
+  isAdhocOutsourcing,
+  isFullOutsourcing,
+  isPartialOutsourcing,
+  useOutsourcingPartial,
+} from '@/features/projects/OutsourcingPartialContext'
 import type { EstimationBlock as Block, Phase, Step } from '../types/estimation'
 
 function StepSection({
@@ -162,8 +169,26 @@ export function EstimationBlockView({
   const dispatch = useEstimationDispatch()
   const { estimation, errors } = useEstimationState()
   const { success } = useToast()
+  const outsourcing = useOutsourcingPartial()
+  const phaseValidationMode = isFullOutsourcing(outsourcing)
+    ? 'full'
+    : isAdhocOutsourcing(outsourcing)
+      ? 'adhoc'
+      : isPartialOutsourcing(outsourcing)
+        ? 'partial'
+        : 'strict'
   const tab =
     block.entityTabs.find((t) => t.entityId === block.activeEntityId) ?? block.entityTabs[0]
+  const showElectrificationInput = hasAnyPhaseBlock(tab?.steps ?? [], {
+    phaseValidationMode,
+    fullOutsourcing: isFullOutsourcing(outsourcing)
+      ? {
+          paybackStartPhase: outsourcing.paybackStartPhase,
+          paybackPeriodYears: outsourcing.paybackPeriodYears,
+          escalationPercent: outsourcing.escalationPercent,
+        }
+      : null,
+  })
   const headerName = (() => {
     const fromNav = sectorDisplayName?.trim() || ''
     if (fromNav) return fromNav
@@ -284,20 +309,22 @@ export function EstimationBlockView({
           />
         ))}
       </div>
-      <div className="mt-4">
-        <ElectrificationPercentInput
-          value={estimation.electrificationPercentByEntity?.[tab.entityId]}
-          error={errors[`electrificationPercent.${tab.entityId}`]}
-          entityCode={tab.entityCode}
-          onChange={(percent) =>
-            dispatch({
-              type: 'SET_ELECTRIFICATION_PERCENT',
-              entityId: tab.entityId,
-              percent,
-            })
-          }
-        />
-      </div>
+      {showElectrificationInput ? (
+        <div className="mt-4">
+          <ElectrificationPercentInput
+            value={estimation.electrificationPercentByEntity?.[tab.entityId]}
+            error={errors[`electrificationPercent.${tab.entityId}`]}
+            entityCode={tab.entityCode}
+            onChange={(percent) =>
+              dispatch({
+                type: 'SET_ELECTRIFICATION_PERCENT',
+                entityId: tab.entityId,
+                percent,
+              })
+            }
+          />
+        </div>
+      ) : null}
       <CardFooter
         stepCount={tab.steps.length}
         showSubmit={showSubmit}

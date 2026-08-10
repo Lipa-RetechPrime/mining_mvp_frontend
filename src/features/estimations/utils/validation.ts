@@ -22,6 +22,47 @@ export function phaseHasEnteredValue(phase: Phase): boolean {
 }
 
 /**
+ * Design / electrification is shown only after at least one phase block exists
+ * on any cost item (empty blocks count). Full outsourcing: amount + payback
+ * settings count as phases, since payback rows are display-only until stamp.
+ */
+export function hasAnyPhaseBlock(
+  steps: Step[],
+  options?: {
+    phaseValidationMode?: PhaseValidationMode
+    fullOutsourcing?: {
+      paybackStartPhase?: string | null
+      paybackPeriodYears?: number | null
+      escalationPercent?: number | null
+    } | null
+  },
+): boolean {
+  if (steps.some((step) => step.phases.length > 0)) return true
+
+  const mode = options?.phaseValidationMode
+  const full = options?.fullOutsourcing
+  const isFull = mode === 'full' || full != null
+  if (!isFull) return false
+
+  const start = full?.paybackStartPhase?.trim() ?? ''
+  const years = Number(full?.paybackPeriodYears)
+  const escalation = Number(full?.escalationPercent)
+  const settingsOk =
+    full == null
+      ? true
+      : Boolean(start) &&
+        Number.isFinite(years) &&
+        years > 0 &&
+        Number.isFinite(escalation) &&
+        escalation >= 0
+  if (!settingsOk) return false
+
+  return steps.some(
+    (step) => step.amount != null && Number.isFinite(step.amount),
+  )
+}
+
+/**
  * Ownership (`strict`) and Partial: filled origin phase values must sum to Amount
  * (Partial: before contribution%; contributor readout is display-only).
  * Full: no phase entry required.
@@ -225,9 +266,14 @@ export function validateEstimation(
   }
 
   const percentByEntity = estimation.electrificationPercentByEntity ?? {}
+  const phaseMode = resolvePhaseValidationMode(options)
   for (const block of estimation.blocks) {
     for (const tab of block.entityTabs) {
       if (!tab.steps.some(isStepPopulated)) continue
+      // No phase blocks → Design % is hidden and not required.
+      if (!hasAnyPhaseBlock(tab.steps, { phaseValidationMode: phaseMode })) {
+        continue
+      }
       const percent = resolveElectrificationPercentForEntity(
         percentByEntity,
         tab,

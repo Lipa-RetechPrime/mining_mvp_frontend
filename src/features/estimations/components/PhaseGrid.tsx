@@ -249,7 +249,7 @@ export function PhaseGrid({
             {isAdhoc
               ? 'Enter phase values manually. They do not need to sum to Amount.'
               : isPartial
-                ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display; remainder plus escalation is shown on the Overall sheet after the last filled phase.'
+                ? 'Enter origin phase values that sum to Amount. Contributor % is applied for display;  Payback amount is shown on the Overall sheet after the last filled phase.'
                 : `Allocate cash flows across phases. Add up to ${PHASE_ADD_BATCH_SIZE} phases at a time, never more than the mine life.`}
           </p>
           {sumError ? (

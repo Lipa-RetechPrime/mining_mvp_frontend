@@ -6,11 +6,12 @@ The application shall support future addition, editing, disabling, and removal o
 
 This document distinguishes:
 
-- **Current MVP status** — what is already available
-- **Active MVP phase** — ownership / outsourcing delivery-mode flow now in progress
+- **Current MVP status** — what is already available (including delivery-mode / outsourcing)
+- **Active MVP behaviour** — Ownership / Outsourcing per cost function (see §3)
 - **Target product vision** — longer-term requirements that are not yet current status
 
-Feature detail for the active delivery-mode phase also lives in `specs/002-ownership-outsourcing-flow/spec.md`.
+Feature detail: `specs/002-ownership-outsourcing-flow/spec.md`, `specs/003-full-readonly-payback-phases/spec.md`.  
+Developer map: `docs/DEVELOPER_WALKTHROUGH.md`.
 
 ## 2. Current MVP Status
 
@@ -21,12 +22,15 @@ The following are already present in the MVP (not future wishlist):
 - Post-login landing on dashboard
 - Project / mine listing and selection
 - Project detail route that opens the cost-estimation workspace
+- **Per cost-function delivery mode** (Ownership vs Outsourcing), with mode choice modal when unset
+- **Outsourcing contribution kinds:** Partial (External Agent), Full (Flat rate), and Adhoc
+- FIT (Function Investment Type) persistence of mode/config against **mine + cost function**
 - Cost estimation create, update, and delete (mine-level)
-- Cost-item addition, editing, and deletion
+- Cost-item addition, editing, and deletion **scoped by active FIT**
 - Entity tabs and sector navigation (mine side nav)
-- Required design / electrification percent per entity (prefilled across cost items for that entity; editable)
-- Phase-based investment entry and calculations on the form
-- Overall investment summary view
+- Design / electrification percent per entity — shown after at least one **phase block** exists on that entity’s cost items; required on submit when shown
+- Phase-based investment entry (Ownership / Partial / Adhoc) and Full **read-only payback** phases
+- Overall investment summary view, with Partial/Full **payback overlays** (and entity-tab formula captions where enabled)
 - Excel download for a mine
 - Loading, validation, confirmation, and error states
 - Collapsible / context side navigation
@@ -36,15 +40,16 @@ The following are already present in the MVP (not future wishlist):
 - Full Super Admin / multi-tenant RBAC product surface is incomplete
 - Some listing / selection data may still be partially static or placeholder alongside live investment APIs
 - Dynamic cost-function metadata-driven forms (database-defined field schemas) are not the current estimation UX
-- Ownership vs Outsourcing delivery-mode choice after project listing is **not yet shipped** (see §3)
+- Nest must keep **FIT-scoped** investment updates (do not wipe peer FIT cost items); FE relies on correct backend scoping
+- Excel / Nest overall may lag frontend Partial/Full payback presentation until Nest owns those calculations
 
 ## 3. Active MVP Phase — Ownership & Outsourcing Delivery Mode
 
 ### 3.1 Goal
 
-After a user opens a project from the project listing, the product shall ask how the project is delivered before showing the existing estimation workspace. Modes and related options shall be master-driven and extensible.
+After a user opens a project from the project listing, the product asks how each **cost function** is delivered before showing the estimation workspace. Modes and related options are master-driven (InvestmentType / FIT) and extensible.
 
-`Requirement.md` target sections below remain the long-term vision; this section is the **near-term MVP increment**.
+`Requirement.md` target sections below remain the long-term vision; this section describes the **shipped near-term MVP behaviour**. Detail also lives in `specs/002-ownership-outsourcing-flow/spec.md` and `specs/003-full-readonly-payback-phases/spec.md`. A developer map lives in `docs/DEVELOPER_WALKTHROUGH.md`.
 
 ### 3.2 Delivery-mode modal (per cost function)
 
@@ -53,7 +58,7 @@ After a user opens a project from the project listing, the product shall ask how
 - MVP options:
   - **Ownership**
   - **Outsourcing**
-- Options shall be backed by a **delivery-type master** in the database (not permanently hard-coded as the only possible forever set).
+- Options are backed by the **InvestmentType / delivery master** (not permanently hard-coded as the only possible forever set).
 - Closing / canceling without a choice shall not apply a mode for that function; the user may pick another Cost Function.
 - Once a mode is saved for a **mine + function**, reopen of that function may skip the modal; the user shall still be able to change mode later via an explicit action (with confirmation if switching would hide or orphan data).
 - Different cost functions on the same mine may use different delivery modes.
@@ -63,19 +68,23 @@ After a user opens a project from the project listing, the product shall ask how
 - If the user selects **Ownership**, land on the **existing** cost-item flow:
   - Creation screen when no cost items exist
   - Editing / management screen when cost items exist
-- Existing Ownership estimation behaviour (cost items, phases, electrification %, overall, Excel) remains the baseline and must not regress.
+- Ownership estimation behaviour (cost items, phases summing to Amount, electrification %, overall, Excel) remains the baseline and must not regress.
+- Cost items are stored under an Ownership FIT for that function.
 
 ### 3.4 Outsourcing path
 
-- If the user selects **Outsourcing**, show a screen with two contribution options (extensible later):
+- If the user selects **Outsourcing**, show a screen with contribution options (extensible later):
 
 #### 3.4.1 Partial contribution by outsourcing agent
 
 - MVP default / only agent option for now: **External Agent**
 - Later: additional agents such as **MDO** may be added via master / catalog
 - After selection, show inputs:
-  - **Payback period**
-  - **Escalation percentage** — for the **current cost function only** (the function selected in Cost Functions navigation). Values are stored **per function** so the percentage can differ when the user switches functions; the form must not list every function’s escalation on one screen.
+  - **Contribution percentage**
+  - **Payback period** (years)
+  - **Escalation percentage** — for the **current cost function only** (stored per function / FIT)
+- Contributor phases: user enters origin phases (sum to Amount); Overall shows contribution % share and escalated payback after the entity’s latest filled phase (next N years, capped by mine phase limit).
+- UI blocks submit when the last filled phase leaves insufficient room for the payback window.
 
 #### 3.4.2 Full contribution by outsourcing agent
 
@@ -84,22 +93,30 @@ After a user opens a project from the project listing, the product shall ask how
   - **Payback period**
   - **Escalation percentage**
   - **Phase from which payback starts** — dropdown sourced from the **phase master**
+- Cost-item phasing is **read-only**: equal split of Amount across N phases from start, each × (1 + escalation%); aligned with Overall Full overlay (see `specs/003-full-readonly-payback-phases/spec.md`).
+
+#### 3.4.3 Adhoc contribution
+
+- Adhoc FIT isolation for manual contribution amounts; phase values are not required to sum to Amount.
 
 ### 3.5 Persistence and extensibility
 
-- Persist delivery mode and outsourcing configuration against the **mine + cost function** so values reload when that function is selected again.
+- Persist delivery mode and outsourcing configuration against the **function** via Function Investment Type (FIT) so values reload when that function is selected again.
 - Validate required outsourcing fields before save.
 - Structure UI and data so delivery types, agent types, contribution models, and calculation rules can change later without redesigning the Ownership vs Outsourcing journey.
-- **Out of scope for this MVP increment unless separately specified:** full outsourcing financial calculation engine, overall-table formula changes, and Excel layout changes for outsourcing outcomes.
+- **In scope for current frontend:** Partial/Full overall overlays and Full read-only payback phases.  
+- **Backend follow-on:** authoritative Nest overall/Excel payback math; continued FIT-scoped update isolation.
 
 ### 3.6 Active-phase acceptance (MVP increment)
 
 1. Project open from listing goes to the mine workspace; Cost Function selection shows delivery-mode modal when no mode is saved for that function.
 2. Ownership for a function routes to current create/edit cost-item experience correctly.
-3. Outsourcing for a function offers Partial (External Agent) and Full (Flat rate) with the inputs above.
+3. Outsourcing for a function offers Partial (External Agent), Full (Flat rate), and Adhoc with the inputs above.
 4. Saved mode and outsourcing inputs restore when reopening the same function.
 5. Masters / catalogs allow additional options later without a new top-level journey.
 6. Ownership cost-item smoke paths remain green.
+7. Switching FIT and saving must not wipe peer-mode cost items (Nest scoped update + FE FIT scoping).
+8. Design / electrification % appears only after phase blocks exist (or Full auto payback is ready).
 
 ## 4. User Types *(target product vision)*
 
@@ -479,12 +496,14 @@ Ownership vs Outsourcing navigation and configuration models must remain additiv
 
 ### 19.2 Active MVP phase (ownership / outsourcing)
 
-1. Opening a project without a saved delivery mode shows Ownership / Outsourcing modal first.
-2. Ownership continues the existing cost-item create/edit path.
-3. Outsourcing exposes Partial (External Agent) and Full (Flat rate) with the specified inputs.
-4. Configuration persists and reloads; validation blocks incomplete saves.
+1. Opening a function without a saved delivery mode shows Ownership / Outsourcing modal first.
+2. Ownership continues the existing cost-item create/edit path under an Ownership FIT.
+3. Outsourcing exposes Partial (External Agent), Full (Flat rate), and Adhoc with the specified inputs.
+4. Configuration persists and reloads via FIT; validation blocks incomplete saves.
 5. Catalog / master structure supports later options (e.g. MDO) without a new journey.
 6. No Ownership estimation regression on the smoke checklist.
+7. Overall shows Partial/Full payback overlays; Full cost-item phases are read-only.
+8. Peer FIT cost items survive saves under another mode when Nest update is FIT-scoped.
 
 ### 19.3 Full product readiness *(target — not current status)*
 
@@ -497,6 +516,7 @@ Ownership vs Outsourcing navigation and configuration models must remain additiv
 7. Cost-function inputs are dynamically rendered from database definitions.
 8. Dynamic inputs are validated and submitted successfully.
 9. Historical estimations remain readable after cost-function definitions change.
+10. Nest is the sole authoritative source for Partial/Full payback totals used in Excel and Overall.
 
 ## 20. Open Questions
 
@@ -506,18 +526,19 @@ The following still require stakeholder confirmation for the broader product:
 - Is a separate Tenant Admin role required?
 - Which role may configure cost functions and their fields?
 - Can cost-function definitions be deleted, or only deactivated?
-- Are calculations executed entirely by the backend?
+- Are calculations executed entirely by the backend? *(UI currently computes Partial/Full overlays; Nest overall/Excel follow-on remaining.)*
 - Is approval or review required before an estimation becomes final?
 - Are audit logs required for changes and deletions?
 - Is permanent deletion allowed for tenants, users, and projects?
 - Which report formats are required besides Excel?
 - Are cost functions shared globally or configurable per tenant?
 - Payback period unit for outsourcing (default assumption: years) — confirm with stakeholders.
-- When switching Ownership ↔ Outsourcing, what happens to existing cost items vs outsourcing config (confirm/clear/keep-both)?
-- When do outsourcing financial calculations and Excel / overall impacts enter scope?
+- When switching Ownership ↔ Outsourcing, what UX confirmation is required beyond FIT isolation?
 
 ## 21. Document Control
 
 - Active delivery-mode feature spec: `specs/002-ownership-outsourcing-flow/spec.md`
+- Full read-only payback phases: `specs/003-full-readonly-payback-phases/spec.md`
+- Developer walkthrough: `docs/DEVELOPER_WALKTHROUGH.md`
 - This file’s §2 and §3 are authoritative for **current vs active MVP**; later sections marked *(target)* are not current status claims.
 - Prefer updating the feature spec for delivery-mode behaviour details, then syncing summary changes here.

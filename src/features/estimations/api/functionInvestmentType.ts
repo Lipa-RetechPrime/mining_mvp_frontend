@@ -188,8 +188,14 @@ export async function getFunctionInvestmentTypeDetails(
   const function_master_id = functionMasterId.trim()
   if (!function_master_id) return null
 
-  // Nest investment_type is UUID — send master id, not the slug label.
-  const investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
+  // DTO: function_master_id + investment_type_id (both UUIDs). Resolve slug via master list.
+  let investment_type_id: string
+  try {
+    investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
+  } catch (error) {
+    if (investmentType === 'adhoc-outsourcing') return null
+    throw error
+  }
 
   try {
     const data = await fetchFromBackend<FitApiResponse>(
@@ -198,7 +204,7 @@ export async function getFunctionInvestmentTypeDetails(
         method: 'POST',
         json: {
           function_master_id,
-          investment_type: investment_type_id,
+          investment_type_id,
         },
       },
     )
@@ -209,6 +215,13 @@ export async function getFunctionInvestmentTypeDetails(
     return withPhaseCodeFromPaybackStart(parseFitResponse(data.data))
   } catch (error) {
     if (error instanceof BackendApiError && error.status === 404) return null
+    if (
+      investmentType === 'adhoc-outsourcing' &&
+      error instanceof BackendApiError &&
+      (error.status === 400 || error.status === 500)
+    ) {
+      return null
+    }
     throw error
   }
 }

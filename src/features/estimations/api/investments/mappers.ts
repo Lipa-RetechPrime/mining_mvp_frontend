@@ -333,7 +333,10 @@ export function mapEstimationToDto(
   })
 
   if (mode === 'create') {
+    // Include mine_id when appending cost items to an existing mine (Nest create).
+    const mine_id = asUuidOrNull(estimation.mine_id)
     return {
+      ...(mine_id ? { mine_id } : {}),
       mine_name,
       function_master_id,
       function_name,
