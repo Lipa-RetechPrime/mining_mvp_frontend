@@ -639,8 +639,8 @@ export function withFullPaybackOverlay(
       nextColumns,
       payback,
       targetCount > 0
-        ? `Amount ÷ ${targetCount} × (1 + ${settings.escalationPercent}%)`
-        : `Amount × (1 + ${settings.escalationPercent}%)`,
+        ? `Escalated Remainder ÷ ${targetCount}`
+        : ``,
     )
   })
 

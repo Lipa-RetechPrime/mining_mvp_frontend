@@ -180,6 +180,50 @@ function parseFitResponse(
   return parseFit(data)
 }
 
+let fitDetailsCache: Map<
+  string,
+  { at: number; data: FunctionInvestmentTypeRecord | null }
+> | null = null
+let fitDetailsInflight = new Map<
+  string,
+  Promise<FunctionInvestmentTypeRecord | null>
+>()
+const FIT_DETAILS_TTL_MS = 30_000
+
+function fitDetailsCacheKey(
+  functionMasterId: string,
+  investmentType: InvestmentTypeSlug,
+): string {
+  return `${functionMasterId.trim()}:${investmentType}`
+}
+
+function getFitDetailsCache(): Map<
+  string,
+  { at: number; data: FunctionInvestmentTypeRecord | null }
+> {
+  if (!fitDetailsCache) fitDetailsCache = new Map()
+  return fitDetailsCache
+}
+
+/** Drop cached FIT details (after create/update or mode change). */
+export function invalidateFunctionInvestmentTypeDetailsCache(
+  functionMasterId?: string,
+): void {
+  const cache = getFitDetailsCache()
+  if (!functionMasterId?.trim()) {
+    cache.clear()
+    fitDetailsInflight.clear()
+    return
+  }
+  const prefix = `${functionMasterId.trim()}:`
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix)) cache.delete(key)
+  }
+  for (const key of [...fitDetailsInflight.keys()]) {
+    if (key.startsWith(prefix)) fitDetailsInflight.delete(key)
+  }
+}
+
 /** POST /functions/function-investment-type-details */
 export async function getFunctionInvestmentTypeDetails(
   functionMasterId: string,
@@ -188,41 +232,60 @@ export async function getFunctionInvestmentTypeDetails(
   const function_master_id = functionMasterId.trim()
   if (!function_master_id) return null
 
-  // DTO: function_master_id + investment_type_id (both UUIDs). Resolve slug via master list.
-  let investment_type_id: string
-  try {
-    investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
-  } catch (error) {
-    if (investmentType === 'adhoc-outsourcing') return null
-    throw error
+  const cacheKey = fitDetailsCacheKey(function_master_id, investmentType)
+  const cached = getFitDetailsCache().get(cacheKey)
+  if (cached && Date.now() - cached.at < FIT_DETAILS_TTL_MS) {
+    return cached.data
   }
+  const existingInflight = fitDetailsInflight.get(cacheKey)
+  if (existingInflight) return existingInflight
 
-  try {
-    const data = await fetchFromBackend<FitApiResponse>(
-      ENDPOINTS.investments.functionInvestmentTypeDetails,
-      {
-        method: 'POST',
-        json: {
-          function_master_id,
-          investment_type_id,
+  const request = (async (): Promise<FunctionInvestmentTypeRecord | null> => {
+    // DTO: function_master_id + investment_type_id (both UUIDs). Resolve slug via master list.
+    let investment_type_id: string
+    try {
+      investment_type_id = await resolveInvestmentTypeMasterId(investmentType)
+    } catch (error) {
+      if (investmentType === 'adhoc-outsourcing') return null
+      throw error
+    }
+
+    try {
+      const data = await fetchFromBackend<FitApiResponse>(
+        ENDPOINTS.investments.functionInvestmentTypeDetails,
+        {
+          method: 'POST',
+          json: {
+            function_master_id,
+            investment_type_id,
+          },
         },
-      },
-    )
-    if (data.success === false) {
-      if (data.statusCode === 404) return null
-      throw new Error(data.message || 'Failed to load investment type config')
+      )
+      if (data.success === false) {
+        if (data.statusCode === 404) return null
+        throw new Error(data.message || 'Failed to load investment type config')
+      }
+      return withPhaseCodeFromPaybackStart(parseFitResponse(data.data))
+    } catch (error) {
+      if (error instanceof BackendApiError && error.status === 404) return null
+      if (
+        investmentType === 'adhoc-outsourcing' &&
+        error instanceof BackendApiError &&
+        (error.status === 400 || error.status === 500)
+      ) {
+        return null
+      }
+      throw error
     }
-    return withPhaseCodeFromPaybackStart(parseFitResponse(data.data))
-  } catch (error) {
-    if (error instanceof BackendApiError && error.status === 404) return null
-    if (
-      investmentType === 'adhoc-outsourcing' &&
-      error instanceof BackendApiError &&
-      (error.status === 400 || error.status === 500)
-    ) {
-      return null
-    }
-    throw error
+  })()
+
+  fitDetailsInflight.set(cacheKey, request)
+  try {
+    const data = await request
+    getFitDetailsCache().set(cacheKey, { at: Date.now(), data })
+    return data
+  } finally {
+    fitDetailsInflight.delete(cacheKey)
   }
 }
 
@@ -232,7 +295,28 @@ export type OutsourcingFitBundle = {
   adhoc: FunctionInvestmentTypeRecord | null
 }
 
-/** Parallel details fetch for Partial / Full / Adhoc (shared by page + config UI). */
+function slugForOutsourcingKind(
+  kind: 'partial' | 'full' | 'adhoc',
+): InvestmentTypeSlug {
+  if (kind === 'full') return 'full-outsourcing'
+  if (kind === 'adhoc') return 'adhoc-outsourcing'
+  return 'partial-outsourcing'
+}
+
+/** Fetch a single outsourcing FIT for the active contribution kind. */
+export async function loadOutsourcingFitForKind(
+  functionMasterId: string,
+  kind: 'partial' | 'full' | 'adhoc',
+): Promise<FunctionInvestmentTypeRecord | null> {
+  const id = functionMasterId.trim()
+  if (!id) return null
+  return getFunctionInvestmentTypeDetails(id, slugForOutsourcingKind(kind))
+}
+
+/**
+ * @deprecated Prefer {@link loadOutsourcingFitForKind} — fetches all three kinds.
+ * Kept for rare discovery; prefer active-kind loads.
+ */
 export async function loadOutsourcingFitBundle(
   functionMasterId: string,
 ): Promise<OutsourcingFitBundle> {
@@ -290,6 +374,7 @@ export async function upsertPartialOutsourcingConfig(
     }
     const parsed = parseFitResponse(data.data)
     if (!parsed) throw new Error('Invalid update response for outsourcing config')
+    invalidateFunctionInvestmentTypeDetailsCache(function_master_id)
     return parsed
   }
 
@@ -311,6 +396,7 @@ export async function upsertPartialOutsourcingConfig(
   }
   const parsed = parseFitResponse(data.data)
   if (!parsed) throw new Error('Invalid create response for outsourcing config')
+  invalidateFunctionInvestmentTypeDetailsCache(function_master_id)
   return parsed
 }
 
@@ -413,6 +499,7 @@ export async function upsertFullOutsourcingConfig(
     if (!parsed) {
       throw new Error('Invalid update response for full outsourcing config')
     }
+    invalidateFunctionInvestmentTypeDetailsCache(function_master_id)
     return (await withPhaseCodeFromPaybackStart(parsed))!
   }
 
@@ -436,6 +523,7 @@ export async function upsertFullOutsourcingConfig(
   if (!parsed) {
     throw new Error('Invalid create response for full outsourcing config')
   }
+  invalidateFunctionInvestmentTypeDetailsCache(function_master_id)
   return (await withPhaseCodeFromPaybackStart(parsed))!
 }
 
@@ -537,13 +625,13 @@ async function createInvestmentTypeStub(
   }
   const parsed = parseFitResponse(data.data)
   if (!parsed) throw new Error('Invalid response when saving delivery mode')
+  invalidateFunctionInvestmentTypeDetailsCache(function_master_id)
   return parsed
 }
 
 /**
- * Resolve Ownership vs Outsourcing from preference + FunctionInvestmentType rows.
- * Preference lets the user keep both datasets and switch freely.
- * Outsourcing may be preferred before any PO/FO/AH row exists (create runs on config save).
+ * Resolve Ownership vs Outsourcing from preference + FunctionInvestmentType.
+ * Preference-first: only hit Nest for the active mode (or show modal if unset).
  */
 export async function resolveDeliveryModeFromApi(
   mineId: string,
@@ -553,32 +641,20 @@ export async function resolveDeliveryModeFromApi(
   const mine = mineId.trim()
   if (!id || !mine) return null
 
-  const [partial, full, adhoc, ownership] = await Promise.all([
-    getFunctionInvestmentTypeDetails(id, 'partial-outsourcing'),
-    getFunctionInvestmentTypeDetails(id, 'full-outsourcing'),
-    getFunctionInvestmentTypeDetails(id, 'adhoc-outsourcing'),
-    getFunctionInvestmentTypeDetails(id, 'ownership'),
-  ])
-
   const preferred = getPreferredDeliveryMode(mine, id)
-  // Honor explicit per-mine preference even when FIT rows do not exist yet.
   if (preferred === 'outsourcing') return 'outsourcing'
-  if (preferred === 'ownership' && ownership) return 'ownership'
-  if (preferred === 'ownership' && !partial && !full && !adhoc) {
+  if (preferred === 'ownership') {
+    const ownership = await getFunctionInvestmentTypeDetails(id, 'ownership')
     return ownership ? 'ownership' : null
   }
 
-  if (fitToPartialSettings(partial) || fitToFullSettings(full) || adhoc) {
-    return 'outsourcing'
-  }
-  if (ownership) return 'ownership'
-  if (partial || full || adhoc) return 'outsourcing'
+  // No preference yet — do not probe all FIT types; let the delivery modal ask.
   return null
 }
 
 /**
  * Persist delivery mode choice for this mine + function.
- * Ownership → creates ownership FIT via create-function-investment-type immediately.
+ * Ownership → ensure ownership FIT exists (create only if missing).
  * Outsourcing → stores preference only; create runs when the user saves
  * Partial/Full/Adhoc config details.
  */
@@ -588,8 +664,9 @@ export async function persistDeliveryModeChoice(
   mode: 'ownership' | 'outsourcing',
 ): Promise<void> {
   setPreferredDeliveryMode(mineId, functionMasterId, mode)
+  invalidateFunctionInvestmentTypeDetailsCache(functionMasterId)
   if (mode === 'ownership') {
-    await createInvestmentTypeStub(functionMasterId, 'ownership')
+    await ensureFunctionInvestmentTypeStub(functionMasterId, 'ownership')
   }
 }
 
@@ -603,7 +680,21 @@ export async function ensureFunctionInvestmentTypeStub(
     investmentType,
   )
   if (existing) return existing
-  return createInvestmentTypeStub(functionMasterId, investmentType)
+  try {
+    return await createInvestmentTypeStub(functionMasterId, investmentType)
+  } catch (error) {
+    // Nest uniqueness: another client/tab may have created it between get and create.
+    const message = error instanceof Error ? error.message : String(error)
+    if (/already exists/i.test(message)) {
+      invalidateFunctionInvestmentTypeDetailsCache(functionMasterId)
+      const raced = await getFunctionInvestmentTypeDetails(
+        functionMasterId,
+        investmentType,
+      )
+      if (raced) return raced
+    }
+    throw error
+  }
 }
 
 /** Ensure an adhoc-outsourcing stub exists for Adhoc cost-item isolation. */

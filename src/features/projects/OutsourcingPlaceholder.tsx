@@ -7,7 +7,7 @@ import {
   ensureFunctionInvestmentTypeStub,
   fitToFullSettings,
   fitToPartialSettings,
-  loadOutsourcingFitBundle,
+  loadOutsourcingFitForKind,
   softFullFieldsFromFit,
   softPartialFieldsFromFit,
   type FunctionInvestmentTypeRecord,
@@ -244,56 +244,32 @@ export function OutsourcingPlaceholder({
     setHydrated(false)
     void (async () => {
       try {
-        const { partial: partialFit, full: fullFit, adhoc: adhocFit } =
-          await loadOutsourcingFitBundle(currentFunctionId)
-        if (cancelled) return
-
-        const partialId = partialFit?.function_investment_type_id ?? null
-        const fullId = fullFit?.function_investment_type_id ?? null
-        const adhocId = adhocFit?.function_investment_type_id ?? null
-        setPartialFitId(partialId)
-        setFullFitId(fullId)
-        setAdhocFitId(adhocId)
-        setPartialFitRecord(partialFit)
-        setFullFitRecord(fullFit)
-
-        const fullSettings = fitToFullSettings(fullFit)
-        const partialSettings = fitToPartialSettings(partialFit)
         const preferred =
           getPreferredOutsourcingKind(projectId, currentFunctionId) ??
-          (partialSettings
-            ? 'partial'
-            : fullSettings
-              ? 'full'
-              : adhocId
-                ? 'adhoc'
-                : partialFit
-                  ? 'partial'
-                  : fullFit
-                    ? 'full'
-                    : 'partial')
+          (initialSettings?.kind === 'full'
+            ? 'full'
+            : initialSettings?.kind === 'adhoc'
+              ? 'adhoc'
+              : 'partial')
 
-        // Prefill from API soft fields whenever a FIT row exists (not only when complete).
-        if (preferred === 'full' && fullFit) {
-          setFitId(fullId)
-          setConfig(configFromFullFit(fullFit))
-        } else if (preferred === 'partial' && partialFit) {
-          setFitId(partialId)
-          setConfig(configFromPartialFit(partialFit))
-        } else if (preferred === 'adhoc' && adhocId) {
-          setFitId(adhocId)
-          setConfig({
-            ...createEmptyOutsourcingConfig(),
-            contributionKind: 'adhoc',
-          })
-        } else if (partialFit && softPartialFieldsFromFit(partialFit)) {
-          setFitId(partialId)
-          setConfig(configFromPartialFit(partialFit))
-        } else if (fullFit) {
-          setFitId(fullId)
-          setConfig(configFromFullFit(fullFit))
-        } else if (adhocId) {
-          setFitId(adhocId)
+        const fit = await loadOutsourcingFitForKind(currentFunctionId, preferred)
+        if (cancelled) return
+
+        const fitIdValue = fit?.function_investment_type_id ?? null
+        setPartialFitId(preferred === 'partial' ? fitIdValue : null)
+        setFullFitId(preferred === 'full' ? fitIdValue : null)
+        setAdhocFitId(preferred === 'adhoc' ? fitIdValue : null)
+        setPartialFitRecord(preferred === 'partial' ? fit : null)
+        setFullFitRecord(preferred === 'full' ? fit : null)
+
+        if (preferred === 'full' && fit) {
+          setFitId(fitIdValue)
+          setConfig(configFromFullFit(fit))
+        } else if (preferred === 'partial' && fit) {
+          setFitId(fitIdValue)
+          setConfig(configFromPartialFit(fit))
+        } else if (preferred === 'adhoc' && fitIdValue) {
+          setFitId(fitIdValue)
           setConfig({
             ...createEmptyOutsourcingConfig(),
             contributionKind: 'adhoc',
@@ -303,7 +279,10 @@ export function OutsourcingPlaceholder({
           setConfig(configFromSettings(initialSettings))
         } else {
           setFitId(null)
-          setConfig(createEmptyOutsourcingConfig())
+          setConfig({
+            ...createEmptyOutsourcingConfig(),
+            contributionKind: preferred,
+          })
         }
         setErrors({})
         setSavedMessage(null)
@@ -359,21 +338,56 @@ export function OutsourcingPlaceholder({
   function setContributionKind(kind: OutsourcingContributionKind) {
     setSavedMessage(null)
     setErrors({})
-    if (kind === 'partial') {
-      setFitId(partialFitId)
-      setConfig(configFromPartialFit(partialFitRecord))
-      return
-    }
-    if (kind === 'full') {
-      setFitId(fullFitId)
-      setConfig(configFromFullFit(fullFitRecord))
-      return
-    }
-    setFitId(adhocFitId)
-    setConfig({
-      ...createEmptyOutsourcingConfig(),
-      contributionKind: 'adhoc',
-    })
+    void (async () => {
+      const functionId = currentFunctionId
+      if (!functionId) {
+        setConfig({
+          ...createEmptyOutsourcingConfig(),
+          contributionKind: kind,
+        })
+        return
+      }
+
+      if (kind === 'partial') {
+        let record = partialFitRecord
+        let id = partialFitId
+        if (!record) {
+          record = await loadOutsourcingFitForKind(functionId, 'partial')
+          id = record?.function_investment_type_id ?? null
+          setPartialFitRecord(record)
+          setPartialFitId(id)
+        }
+        setFitId(id)
+        setConfig(configFromPartialFit(record))
+        return
+      }
+
+      if (kind === 'full') {
+        let record = fullFitRecord
+        let id = fullFitId
+        if (!record) {
+          record = await loadOutsourcingFitForKind(functionId, 'full')
+          id = record?.function_investment_type_id ?? null
+          setFullFitRecord(record)
+          setFullFitId(id)
+        }
+        setFitId(id)
+        setConfig(configFromFullFit(record))
+        return
+      }
+
+      let id = adhocFitId
+      if (!id) {
+        const record = await loadOutsourcingFitForKind(functionId, 'adhoc')
+        id = record?.function_investment_type_id ?? null
+        setAdhocFitId(id)
+      }
+      setFitId(id)
+      setConfig({
+        ...createEmptyOutsourcingConfig(),
+        contributionKind: 'adhoc',
+      })
+    })()
   }
 
   async function handleSave() {

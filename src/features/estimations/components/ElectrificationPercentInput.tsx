@@ -62,9 +62,7 @@ export function ElectrificationPercentInput({
         onBlur={() => commitDraft(draft)}
       />
       <p className="mt-1.5 text-xs text-[--text-color]">
-        Enter a percent for {entityLabel} when needed. Leave blank on new items
-        to keep an already-saved entity value; typing a new value updates the
-        whole entity.
+        Enter a percent for {entityLabel}. Required when phases are present.
       </p>
     </div>
   )

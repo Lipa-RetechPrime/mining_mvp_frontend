@@ -98,7 +98,6 @@ export function CostItemsDraftForm({
   entityId,
   entityCode,
   minePhaseLimit,
-  electrificationPercent,
   onSubmit,
   onCancel,
 }: {
@@ -107,8 +106,6 @@ export function CostItemsDraftForm({
   entityId: string
   entityCode?: string
   minePhaseLimit: number | null | undefined
-  /** Saved design % for this entity — used on submit if the input is left blank; never shown as a default. */
-  electrificationPercent?: number | null
   onSubmit: (
     steps: Step[],
     electrificationPercent: number | null,
@@ -203,14 +200,12 @@ export function CostItemsDraftForm({
           : null,
       })
     }
-    const savedPercent =
-      electrificationPercent != null && Number.isFinite(electrificationPercent)
-        ? electrificationPercent
-        : null
+    // Create path: only the value the user entered — never fall back to a
+    // previously saved entity % (that was silent-submitting e.g. 5%).
     const effectivePercent =
       percent != null && Number.isFinite(percent) && percent >= 0
         ? percent
-        : savedPercent
+        : null
     if (
       hasAnyPhaseBlock(prepared, {
         phaseValidationMode,

@@ -32,7 +32,6 @@ export {
   ensureEntityTabs,
   mapDtoToEstimation,
   mapEstimationToDto,
-  mergePreservedFitSteps,
   scopeEstimationToInvestmentType,
   withDerivedAutomaticPercentages,
   withMasterEntityTabs,

@@ -54,12 +54,13 @@ export function apiErrorMessage(error: unknown, fallback: string): string {
 /** Coalesce concurrent list fetches and briefly reuse the result after mutations. */
 let listInflight: Promise<Estimation[]> | null = null
 let listCache: { at: number; data: Estimation[] } | null = null
-const LIST_CACHE_TTL_MS = 800
+const LIST_CACHE_TTL_MS = 2500
 
-export function invalidateEstimationsListCache(): void {
+/** Clear list (+ optional mine-scoped overall) caches after mutations. */
+export function invalidateEstimationsListCache(mineId?: string): void {
   listCache = null
   listInflight = null
-  invalidateOverallListCache()
+  invalidateOverallListCache(mineId)
 }
 
 function rememberFitsFromEstimation(estimation: Estimation): void {
@@ -229,7 +230,7 @@ function isInvestmentsListUnavailable(error: unknown): boolean {
 /** Prefer list data when available; tolerate Nest get-all-list association failures. */
 async function findEstimationInList(mineId: string): Promise<Estimation | undefined> {
   try {
-    invalidateEstimationsListCache()
+    // Do not clear cache here — callers invalidate after mutations.
     return (await listEstimations()).find(
       (item) => item.mine_id === mineId || item.id === mineId,
     )
@@ -380,7 +381,6 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
       'Select Ownership or save Outsourcing configuration before saving cost items.',
     )
   }
-  invalidateEstimationsListCache()
   const id = body.id || `est-${generateUuid()}`
   const now = new Date().toISOString()
   const stamped: Estimation = {
@@ -510,7 +510,7 @@ export async function createEstimation(body: Estimation): Promise<Estimation> {
     created,
     entityIdsFromCreate,
   )
-  invalidateEstimationsListCache()
+  invalidateEstimationsListCache(mine_id)
   rememberFitsFromEstimation({ ...created, percentageMasterIdByEntity })
   return { ...created, percentageMasterIdByEntity }
 }
@@ -578,7 +578,6 @@ export async function updateEstimation(
     await loadPhaseIdByNameMap(),
   )
   try {
-    invalidateEstimationsListCache()
     const data = await fetchFromBackend<ApiResponse>(ENDPOINTS.investments.update, {
       method: 'PUT',
       json: payload,
@@ -590,7 +589,7 @@ export async function updateEstimation(
 
   await persistMinePhaseLimit(updated)
   const percentageMasterIdByEntity = await persistElectrificationPercent(updated)
-  invalidateEstimationsListCache()
+  invalidateEstimationsListCache(mine_id)
 
   const result = await withMasterEntityTabs({ ...updated, percentageMasterIdByEntity })
   rememberFitsFromEstimation(result)
@@ -602,7 +601,6 @@ export async function deleteEstimation(id: string): Promise<void> {
   const mine_id = estimation.mine_id
 
   if (mine_id) {
-    invalidateEstimationsListCache()
     try {
       const data = await fetchFromBackend<ApiResponse>(ENDPOINTS.investments.deleteMine, {
         method: 'DELETE',
@@ -619,7 +617,7 @@ export async function deleteEstimation(id: string): Promise<void> {
       }
     }
   }
-  invalidateEstimationsListCache()
+  invalidateEstimationsListCache(mine_id || undefined)
 }
 
 export async function addCostItemToEstimation(
@@ -706,7 +704,9 @@ export async function addCostItemsToEstimation(
     {
       phaseValidationMode: options?.phaseValidationMode,
       paybackPeriodYears: options?.paybackPeriodYears,
-      skipPhaseAmountValidation: options?.phaseValidationMode === 'full',
+      skipPhaseAmountValidation:
+        options?.phaseValidationMode === 'full' ||
+        options?.phaseValidationMode === 'adhoc',
     },
   )
 }
@@ -804,7 +804,7 @@ export async function downloadEstimationExcel(mineId: string): Promise<void> {
 /** Coalesce concurrent overall-list fetches and briefly reuse the result. */
 const overallInflight = new Map<string, Promise<OverallListData>>()
 const overallCache = new Map<string, { at: number; data: OverallListData }>()
-const OVERALL_CACHE_TTL_MS = 1500
+const OVERALL_CACHE_TTL_MS = 2500
 
 function overallCacheKey(
   mineId: string,

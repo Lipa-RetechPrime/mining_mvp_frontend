@@ -207,10 +207,11 @@ export function PhaseGrid({
     : isPartial
       ? 'partial'
       : 'strict'
-  const sumError =
-    phaseAmountSumError(step, phaseValidationMode) ??
-    errors[`${errorPrefix}.phaseAmountSum`] ??
-    null
+  const sumError = isAdhoc
+    ? null
+    : phaseAmountSumError(step, phaseValidationMode) ??
+      errors[`${errorPrefix}.phaseAmountSum`] ??
+      null
   const overLimitError = errors[`${errorPrefix}.phaseLimit`] ?? null
   const limitMissing = phaseLimit == null
   const canRemovePhase = step.phases.length > 0

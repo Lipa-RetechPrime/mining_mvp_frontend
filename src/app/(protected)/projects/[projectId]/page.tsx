@@ -1,9 +1,9 @@
 'use client'
 
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
-import { EstimationScreen } from '@/features/estimations'
 import { listMines, type MineListItem } from '@/features/estimations/api/mines'
 import {
   getMineWiseFunctionList,
@@ -12,7 +12,6 @@ import {
 } from '@/features/estimations/api/master'
 import {
   DeliveryModeModal,
-  OutsourcingPlaceholder,
   type DeliveryModeCode,
   type OutsourcingContributionKind,
   type OutsourcingContributionSettings,
@@ -42,6 +41,36 @@ import {
   sortMinesByLastUpdated,
 } from '@/shared/utils/mineList'
 
+const EstimationScreen = dynamic(
+  () =>
+    import('@/features/estimations/components/EstimationScreen').then((m) => ({
+      default: m.EstimationScreen,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
+        Loading estimation workspace…
+      </div>
+    ),
+  },
+)
+
+const OutsourcingPlaceholder = dynamic(
+  () =>
+    import('@/features/projects/OutsourcingPlaceholder').then((m) => ({
+      default: m.OutsourcingPlaceholder,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
+        Loading outsourcing configuration…
+      </div>
+    ),
+  },
+)
+
 function mineKey(mine: MineListItem): string {
   return mine.mine_id || ''
 }
@@ -53,106 +82,93 @@ async function loadOutsourcingSettings(
   functionMasterId: string,
   preferredKind?: OutsourcingContributionKind | null,
 ): Promise<OutsourcingContributionSettings | null> {
-  const [partialFit, fullFit, adhocFit] = await Promise.all([
-    getFunctionInvestmentTypeDetails(functionMasterId, 'partial-outsourcing'),
-    getFunctionInvestmentTypeDetails(functionMasterId, 'full-outsourcing'),
-    getFunctionInvestmentTypeDetails(functionMasterId, 'adhoc-outsourcing'),
-  ])
   const prefer =
     preferredKind ?? getPreferredOutsourcingKind(mineId, functionMasterId)
 
-  if (prefer === 'adhoc' && adhocFit) {
-    return {
-      kind: 'adhoc',
-      functionInvestmentTypeId: adhocFit.function_investment_type_id,
-    }
-  }
+  // Active kind only — one details call (plus cache/dedupe).
+  const kinds: OutsourcingContributionKind[] = prefer
+    ? [prefer]
+    : ['partial', 'full', 'adhoc']
 
-  const partial = fitToPartialSettings(partialFit)
-  const full = fitToFullSettings(fullFit)
-  const softPartial = softPartialFieldsFromFit(partialFit)
-  const softFull = softFullFieldsFromFit(fullFit)
+  for (const kind of kinds) {
+    const fit = await getFunctionInvestmentTypeDetails(
+      functionMasterId,
+      kind === 'full'
+        ? 'full-outsourcing'
+        : kind === 'adhoc'
+          ? 'adhoc-outsourcing'
+          : 'partial-outsourcing',
+    )
+    if (!fit) continue
 
-  if (prefer === 'full' && full) {
-    return {
-      kind: 'full',
-      escalationPercent: full.escalationPercent,
-      paybackPeriodYears: full.paybackPeriodYears,
-      paybackStartPhase: full.paybackStartPhase,
-      functionInvestmentTypeId: full.functionInvestmentTypeId,
-    }
-  }
-  if (prefer === 'partial' && partial) {
-    return {
-      kind: 'partial',
-      contributionPercentage: partial.contributionPercentage,
-      escalationPercent: partial.escalationPercent,
-      paybackPeriodYears: partial.paybackPeriodYears,
-      functionInvestmentTypeId: partial.functionInvestmentTypeId,
-    }
-  }
-
-  // Soft fallthrough — still open estimation when FIT exists with complete-enough fields.
-  if (prefer === 'full' && softFull) {
-    if (
-      softFull.paybackPeriodYears != null &&
-      Number(softFull.paybackPeriodYears) > 0 &&
-      softFull.escalationPercent != null &&
-      Number(softFull.escalationPercent) >= 0 &&
-      softFull.paybackStartPhase
-    ) {
+    if (kind === 'adhoc') {
       return {
-        kind: 'full',
-        escalationPercent: Number(softFull.escalationPercent),
-        paybackPeriodYears: Number(softFull.paybackPeriodYears),
-        paybackStartPhase: softFull.paybackStartPhase,
-        functionInvestmentTypeId: softFull.functionInvestmentTypeId,
+        kind: 'adhoc',
+        functionInvestmentTypeId: fit.function_investment_type_id,
       }
     }
-  }
-  if (prefer === 'partial' && softPartial) {
+
+    if (kind === 'full') {
+      const full = fitToFullSettings(fit)
+      if (full) {
+        return {
+          kind: 'full',
+          escalationPercent: full.escalationPercent,
+          paybackPeriodYears: full.paybackPeriodYears,
+          paybackStartPhase: full.paybackStartPhase,
+          functionInvestmentTypeId: full.functionInvestmentTypeId,
+        }
+      }
+      const soft = softFullFieldsFromFit(fit)
+      if (
+        soft &&
+        soft.paybackPeriodYears != null &&
+        Number(soft.paybackPeriodYears) > 0 &&
+        soft.escalationPercent != null &&
+        Number(soft.escalationPercent) >= 0 &&
+        soft.paybackStartPhase
+      ) {
+        return {
+          kind: 'full',
+          escalationPercent: Number(soft.escalationPercent),
+          paybackPeriodYears: Number(soft.paybackPeriodYears),
+          paybackStartPhase: soft.paybackStartPhase,
+          functionInvestmentTypeId: soft.functionInvestmentTypeId,
+        }
+      }
+      continue
+    }
+
+    const partial = fitToPartialSettings(fit)
+    if (partial) {
+      return {
+        kind: 'partial',
+        contributionPercentage: partial.contributionPercentage,
+        escalationPercent: partial.escalationPercent,
+        paybackPeriodYears: partial.paybackPeriodYears,
+        functionInvestmentTypeId: partial.functionInvestmentTypeId,
+      }
+    }
+    const soft = softPartialFieldsFromFit(fit)
     if (
-      softPartial.paybackPeriodYears != null &&
-      softPartial.paybackPeriodYears > 0 &&
-      softPartial.contributionPercentage != null &&
-      softPartial.contributionPercentage >= 0 &&
-      softPartial.escalationPercent != null &&
-      softPartial.escalationPercent >= 0
+      soft &&
+      soft.paybackPeriodYears != null &&
+      soft.paybackPeriodYears > 0 &&
+      soft.contributionPercentage != null &&
+      soft.contributionPercentage >= 0 &&
+      soft.escalationPercent != null &&
+      soft.escalationPercent >= 0
     ) {
       return {
         kind: 'partial',
-        contributionPercentage: softPartial.contributionPercentage,
-        escalationPercent: softPartial.escalationPercent,
-        paybackPeriodYears: softPartial.paybackPeriodYears,
-        functionInvestmentTypeId: softPartial.functionInvestmentTypeId,
+        contributionPercentage: soft.contributionPercentage,
+        escalationPercent: soft.escalationPercent,
+        paybackPeriodYears: soft.paybackPeriodYears,
+        functionInvestmentTypeId: soft.functionInvestmentTypeId,
       }
     }
   }
 
-  if (partial) {
-    return {
-      kind: 'partial',
-      contributionPercentage: partial.contributionPercentage,
-      escalationPercent: partial.escalationPercent,
-      paybackPeriodYears: partial.paybackPeriodYears,
-      functionInvestmentTypeId: partial.functionInvestmentTypeId,
-    }
-  }
-  if (full) {
-    return {
-      kind: 'full',
-      escalationPercent: full.escalationPercent,
-      paybackPeriodYears: full.paybackPeriodYears,
-      paybackStartPhase: full.paybackStartPhase,
-      functionInvestmentTypeId: full.functionInvestmentTypeId,
-    }
-  }
-  if (adhocFit) {
-    return {
-      kind: 'adhoc',
-      functionInvestmentTypeId: adhocFit.function_investment_type_id,
-    }
-  }
   return null
 }
 
