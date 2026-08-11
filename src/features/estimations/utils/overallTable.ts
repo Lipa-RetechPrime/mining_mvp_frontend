@@ -163,14 +163,18 @@ function pushPaybackRow(
 
 /**
  * After payback rows are inserted / contribution scaling applied:
- * - Design[col] = (displayed Sub-Total[col] + payback[col]) × design%
- * - Sub-Total payback cols = sum(external payback)
+ * - Partial Sub-Total[col] = contributed phase share[col] + payback[col]
+ *   Amount = sum of those phase Sub-Total cells
+ * - Full Sub-Total[col] = payback[col] only
+ *   Amount = sum of payback phase cells
+ * - Design[col] = Sub-Total[col] × design%
  * - Total Amount payback cols = that Sub-Total × (1 + design%)
  */
 function recomputeDesignRowFromDisplayedBases(
   rows: OverallTableRow[],
   columns: string[],
   paybackTargetCodes: Set<string>,
+  mode: 'partial' | 'full' = 'partial',
 ): OverallTableRow[] {
   const next = rows.map((row) => ({
     ...row,
@@ -196,8 +200,12 @@ function recomputeDesignRowFromDisplayedBases(
     let subtotalIndex = -1
     let designIndex = -1
     let totalIndex = -1
+    const contributedSums: Record<string, number> = {}
     const paybackSums: Record<string, number> = {}
-    for (const column of columns) paybackSums[column] = 0
+    for (const column of columns) {
+      contributedSums[column] = 0
+      paybackSums[column] = 0
+    }
 
     for (let index = sectionStart; index < sectionEnd; index += 1) {
       const row = next[index]
@@ -205,6 +213,13 @@ function recomputeDesignRowFromDisplayedBases(
         subtotalIndex = index
       } else if (row.kind === 'section-total') {
         totalIndex = index
+      } else if (row.kind === 'item') {
+        for (const column of columns) {
+          const value = row.phaseValues[column]
+          if (value != null && Number.isFinite(value)) {
+            contributedSums[column] += value
+          }
+        }
       } else if (
         row.kind === 'design-charge' &&
         row.details.startsWith('External agent payback')
@@ -223,10 +238,28 @@ function recomputeDesignRowFromDisplayedBases(
       }
     }
 
-    if (subtotalIndex >= 0 && paybackTargetCodes.size > 0) {
+    if (subtotalIndex >= 0) {
       const subtotalRow = next[subtotalIndex]
-      for (const column of paybackTargetCodes) {
-        subtotalRow.phaseValues[column] = paybackSums[column]
+      if (mode === 'partial') {
+        // Partial: each phase = contributor share + payback in that phase.
+        let amountFromPhases = 0
+        for (const column of columns) {
+          const sum =
+            (contributedSums[column] ?? 0) + (paybackSums[column] ?? 0)
+          subtotalRow.phaseValues[column] = sum !== 0 ? sum : null
+          if (sum !== 0) amountFromPhases += sum
+        }
+        // Amount = sum of phase Sub-Total cells (contributed + payback).
+        subtotalRow.amount = amountFromPhases
+      } else {
+        // Full: Sub-Total phases/Amount are payback only.
+        let amountFromPayback = 0
+        for (const column of columns) {
+          const payback = paybackSums[column] ?? 0
+          subtotalRow.phaseValues[column] = payback !== 0 ? payback : null
+          if (payback !== 0) amountFromPayback += payback
+        }
+        subtotalRow.amount = amountFromPayback
       }
     }
 
@@ -245,12 +278,42 @@ function recomputeDesignRowFromDisplayedBases(
         designRow.phaseValues[column] = factor > 0 ? base * factor : null
       }
 
+      if (factor > 0) {
+        const subtotalAmount =
+          subtotalRow.amount != null && Number.isFinite(subtotalRow.amount)
+            ? subtotalRow.amount
+            : 0
+        designRow.amount = subtotalAmount * factor
+        if (totalIndex >= 0) {
+          next[totalIndex].amount = subtotalAmount * (1 + factor)
+        }
+      }
+
       if (totalIndex >= 0 && paybackTargetCodes.size > 0) {
         const totalRow = next[totalIndex]
         for (const column of paybackTargetCodes) {
           const subtotalValue = subtotalRow.phaseValues[column] ?? 0
           totalRow.phaseValues[column] =
             factor > 0 ? subtotalValue * (1 + factor) : subtotalValue
+        }
+      }
+
+      // Partial/Full Total Amount for remaining phase cols = Sub-Total + Design.
+      if (totalIndex >= 0) {
+        const totalRow = next[totalIndex]
+        for (const column of columns) {
+          if (paybackTargetCodes.has(column)) continue
+          const subtotalValue = subtotalRow.phaseValues[column]
+          const designValue = designRow.phaseValues[column]
+          if (
+            (subtotalValue == null || !Number.isFinite(subtotalValue)) &&
+            (designValue == null || !Number.isFinite(designValue))
+          ) {
+            totalRow.phaseValues[column] = null
+            continue
+          }
+          totalRow.phaseValues[column] =
+            (subtotalValue ?? 0) + (designValue ?? 0)
         }
       }
     }
@@ -428,7 +491,7 @@ export type PartialPaybackOverlayInput = {
  * `paybackPeriodYears` catalog phases capped by mine phaseLimit.
  * Example: item A ends P6, item B ends P2 → both payback from after P6.
  * Design% on phases is folded into the single Design/electrification row
- * as (displayed Sub-Total + payback) × design%.
+ * from Sub-Total (contributed share + payback per phase for Partial).
  */
 export function withPartialPaybackOverlay(
   built: ReturnType<typeof buildOverallTableRows>,
@@ -554,6 +617,7 @@ export function withPartialPaybackOverlay(
       nextRows,
       nextColumns,
       allTargetCodes,
+      'partial',
     ),
     phaseColumns: nextColumns,
     electrificationPercent,
@@ -649,6 +713,7 @@ export function withFullPaybackOverlay(
       nextRows,
       nextColumns,
       allTargetCodes,
+      'full',
     ),
     phaseColumns: nextColumns,
     electrificationPercent,
