@@ -32,6 +32,7 @@ import {
   setPreferredOutsourcingKind,
 } from '@/features/projects/outsourcingPreference'
 import { Button } from '@/shared/components/ui/Button'
+import { LoadingOverlay } from '@/shared/components/ui/Loading'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { Modal } from '@/shared/components/ui/Modal'
 import { routes } from '@/shared/config/routes'
@@ -49,8 +50,8 @@ const EstimationScreen = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
-        Loading estimation workspace…
+      <div className="relative min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+        <LoadingOverlay />
       </div>
     ),
   },
@@ -64,8 +65,8 @@ const OutsourcingPlaceholder = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
-        Loading outsourcing configuration…
+      <div className="relative min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+        <LoadingOverlay />
       </div>
     ),
   },
@@ -524,6 +525,20 @@ function ProjectDetailsContent() {
   const showFirstTimeModeGate =
     showModeModal && !deliveryMode
 
+  const showInstructionPanel =
+    showFirstTimeModeGate ||
+    noFunctionsForMine ||
+    (waitingForFunction && !mineFunctionsLoading)
+
+  /** One overlay instead of mine-select + body (+ side-nav) spinners together. */
+  const showPageLoadingOverlay =
+    !showInstructionPanel &&
+    (minesLoading ||
+      mineFunctionsLoading ||
+      waitingForActiveFit ||
+      !modeReady ||
+      (deliveryMode === 'outsourcing' && partialSettingsLoading))
+
   const functionOptions = useMemo(
     () =>
       mineFunctions.map((fn) => ({
@@ -534,7 +549,12 @@ function ProjectDetailsContent() {
   )
 
   return (
-    <div className="min-w-0 space-y-5">
+    <div
+      className="relative min-w-0 space-y-5"
+      aria-busy={showPageLoadingOverlay}
+    >
+      {showPageLoadingOverlay ? <LoadingOverlay /> : null}
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-portal-navy">
@@ -559,7 +579,7 @@ function ProjectDetailsContent() {
               aria-label="Projects / Mines"
             >
               {minesLoading ? (
-                <option value="">Loading…</option>
+                <option value="" />
               ) : mineOptions.length === 0 ? (
                 <option value="">No mines available</option>
               ) : (
@@ -595,30 +615,28 @@ function ProjectDetailsContent() {
         </div>
       </div>
 
-      {!modeReady ||
-      showFirstTimeModeGate ||
-      minesLoading ||
-      mineFunctionsLoading ||
-      waitingForFunction ||
-      waitingForActiveFit ? (
+      {showFirstTimeModeGate ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          {showFirstTimeModeGate
-            ? 'Choose a delivery mode for this cost function…'
-            : noFunctionsForMine
-              ? 'No cost functions for this mine. Select another project from the list.'
-              : waitingForFunction || mineFunctionsLoading
-                ? 'Select a cost function…'
-                : 'Loading…'}
+          Choose a delivery mode for this cost function…
         </div>
-      ) : deliveryMode === 'outsourcing' && partialSettingsLoading ? (
+      ) : noFunctionsForMine ? (
         <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          Loading outsourcing configuration…
+          No cost functions for this mine. Select another project from the list.
         </div>
+      ) : waitingForFunction && !mineFunctionsLoading ? (
+        <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
+          Select a cost function…
+        </div>
+      ) : showPageLoadingOverlay ? (
+        <div
+          className="min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60"
+          aria-hidden
+        />
       ) : showOutsourcingSetupPage ? (
         <Suspense
           fallback={
-            <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
-              Loading outsourcing…
+            <div className="relative min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+              <LoadingOverlay />
             </div>
           }
         >
@@ -640,8 +658,8 @@ function ProjectDetailsContent() {
       ) : deliveryMode === 'outsourcing' || mineOptions.length > 0 ? (
         <Suspense
           fallback={
-            <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
-              Loading estimation…
+            <div className="relative min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+              <LoadingOverlay />
             </div>
           }
         >
@@ -700,9 +718,9 @@ function ProjectDetailsContent() {
       >
         <Suspense
           fallback={
-            <p className="py-8 text-center text-sm text-gray-500">
-              Loading outsourcing…
-            </p>
+            <div className="relative min-h-[8rem]">
+              <LoadingOverlay />
+            </div>
           }
         >
           <OutsourcingPlaceholder
@@ -765,8 +783,8 @@ export default function ProjectDetailsPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-[min(16rem,40vh)] flex-col items-center justify-center rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-          Loading…
+        <div className="relative min-h-[min(16rem,40vh)] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+          <LoadingOverlay />
         </div>
       }
     >

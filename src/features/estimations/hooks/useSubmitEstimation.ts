@@ -103,7 +103,7 @@ export function useSubmitEstimation(options?: {
       }
       return;
     }
-    dispatch({ type: "SET_STATUS", status: "saving", message: "Saving…" });
+    dispatch({ type: "SET_STATUS", status: "saving", message: "" });
     const isCreate = !prepared.mine_id && !prepared.id;
     try {
       const saved = isCreate

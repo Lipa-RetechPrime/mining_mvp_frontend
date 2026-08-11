@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/shared/components/ui/Button'
+import { Loading } from '@/shared/components/ui/Loading'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { ConfirmDeleteModal } from './ConfirmDeleteModal'
 import { EntityTabs } from './EntityTabs'
@@ -91,6 +92,8 @@ function EstimationTableCard({
   const tabs = block?.entityTabs ?? []
   const [activeEntityId, setActiveEntityId] = useState(() => OVERALL_TAB_ID)
   const [addingCostItems, setAddingCostItems] = useState(false)
+  /** Bumped when an entity is emptied so draft form remounts cleanly. */
+  const [emptyEntityDraftKey, setEmptyEntityDraftKey] = useState(0)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -299,13 +302,38 @@ function EstimationTableCard({
         await onDelete(estimation.id)
       } else {
         if (!activeTab) return
+        const entityId = activeTab.entityId
         const updated = await removeCostItemFromEstimation(
           estimation.id,
-          activeTab.entityId,
+          entityId,
           pendingDelete.step.id,
         )
         onItemUpdated(updated)
         setAddingCostItems(false)
+
+        const scoped = functionMasterId
+          ? scopeEstimationToInvestmentType(
+              updated,
+              functionInvestmentTypeId,
+              functionMasterId,
+              {
+                includeLegacyNullFit,
+                functionName,
+              },
+            )
+          : updated
+        const entityEmpty = !scoped.blocks.some((block) =>
+          block.entityTabs.some(
+            (tab) =>
+              tab.entityId === entityId && tab.steps.some(isStepPopulated),
+          ),
+        )
+        if (entityEmpty) {
+          setEmptyEntityDraftKey((key) => key + 1)
+          setActiveEntityId(entityId)
+        }
+
+        await onChanged()
         if (isOverallTab) await loadOverall()
       }
       setPendingDelete(null)
@@ -406,9 +434,16 @@ function EstimationTableCard({
                 className="!px-3 !py-1.5 !text-xs"
                 onClick={() => void handleDownloadExcel()}
                 disabled={downloading || !estimation.mine_id}
+                aria-busy={downloading}
               >
-                <MaterialIcon name="download" size={14} />
-                {downloading ? 'Downloading…' : 'Download'}
+                {downloading ? (
+                  <Loading compact />
+                ) : (
+                  <>
+                    <MaterialIcon name="download" size={14} />
+                    Download
+                  </>
+                )}
               </Button>
               <Button
                 variant="secondary"
@@ -434,30 +469,7 @@ function EstimationTableCard({
 
       {isOverallTab ? (
         overallLoading ? (
-          <div className="flex flex-col items-center justify-center py-16">
-            <svg
-              className="h-8 w-8 animate-spin text-portal-purple"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              aria-hidden
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-              />
-            </svg>
-            <p className="mt-3 text-sm text-gray-500">Loading overall summary…</p>
-          </div>
+          <Loading />
         ) : overallError ? (
           <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
             {overallError}
@@ -515,7 +527,7 @@ function EstimationTableCard({
         </>
       ) : activeTab ? (
         <CostItemsDraftForm
-          key={activeTab.entityId}
+          key={`${activeTab.entityId}-empty-${emptyEntityDraftKey}`}
           phaseTypes={phaseTypes}
           blockId={block.id}
           entityId={activeTab.entityId}

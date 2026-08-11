@@ -180,8 +180,8 @@ export function MineSideNav({ collapsed = false, className }: MineSideNavProps) 
                 className="flex flex-col gap-0.5 pl-5"
               >
                 {loading ? (
-                  <li className="px-3 py-2.5 text-[13px] font-extralight text-white/70">
-                    Loading functions…
+                  <li className="px-3 py-2.5" aria-hidden>
+                    <span className="block h-4 w-24 rounded bg-white/10" />
                   </li>
                 ) : loadError ? (
                   <li className="px-3 py-2.5 text-[13px] font-extralight text-red-200">

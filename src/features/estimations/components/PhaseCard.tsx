@@ -173,12 +173,17 @@ export function PhaseCard({
         />
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-start gap-2">
         {phaseLabel}
         {isAuto ? (
-          <>
+          <div className="flex min-w-0 flex-1 items-start gap-2">
             <Input
-              className="min-w-3 basis-[5rem]"
+              id={`phase-${phase.id}-percentage`}
+              className={
+                errors.percentage
+                  ? 'w-[calc(100%-150px)] shrink-0'
+                  : 'w-auto min-w-[5rem] shrink-0'
+              }
               type="number"
               min={0}
               max={100}
@@ -195,7 +200,11 @@ export function PhaseCard({
               }
             />
             <Input
-              className="min-w-0 basis-[10rem]"
+              className={
+                errors.percentage
+                  ? 'w-[150px] shrink-0'
+                  : 'min-w-[10rem] flex-1'
+              }
               type="text"
               inputMode="decimal"
               suffix="lakhs"
@@ -208,10 +217,12 @@ export function PhaseCard({
                 phase.percentage != null ? formatAmount(calculatedValue) : ''
               }
             />
-          </>
+          </div>
         ) : (
           <Input
-            className="min-w-0 flex-1"
+            className={
+              errors.value ? 'w-max max-w-full' : 'min-w-0 flex-1'
+            }
             type="text"
             inputMode="decimal"
             suffix="lakhs"

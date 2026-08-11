@@ -45,7 +45,7 @@ export function removeCostItem(
   entityId: string,
   stepId: string,
 ): Estimation {
-  return {
+  const next: Estimation = {
     ...estimation,
     blocks: estimation.blocks.map((block, index) => {
       if (index !== 0) return block
@@ -56,7 +56,9 @@ export function removeCostItem(
           if (tab.entityId !== entityId) {
             return { ...tab, steps: tab.steps.filter(isStepPopulated) }
           }
-          const steps = tab.steps.filter((step) => step.id !== stepId && isStepPopulated(step))
+          const steps = tab.steps.filter(
+            (step) => step.id !== stepId && isStepPopulated(step),
+          )
           return {
             ...tab,
             steps,
@@ -65,6 +67,29 @@ export function removeCostItem(
         }),
       }
     }),
+  }
+
+  const entityStillHasItems = next.blocks.some((block) =>
+    block.entityTabs.some(
+      (tab) =>
+        tab.entityId === entityId && tab.steps.some(isStepPopulated),
+    ),
+  )
+  if (entityStillHasItems) return next
+
+  const electrificationPercentByEntity = {
+    ...(next.electrificationPercentByEntity ?? {}),
+  }
+  const percentageMasterIdByEntity = {
+    ...(next.percentageMasterIdByEntity ?? {}),
+  }
+  delete electrificationPercentByEntity[entityId]
+  delete percentageMasterIdByEntity[entityId]
+
+  return {
+    ...next,
+    electrificationPercentByEntity,
+    percentageMasterIdByEntity,
   }
 }
 

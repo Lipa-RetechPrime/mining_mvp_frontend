@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/shared/components/ui/Button";
+import { LoadingOverlay } from "@/shared/components/ui/Loading";
 import { MaterialIcon } from "@/shared/components/ui/MaterialIcon";
 import { Modal } from "@/shared/components/ui/Modal";
 
@@ -19,7 +20,7 @@ import {
 import { useEstimationList } from "../hooks/useLoadEstimation";
 import { useSubmitEstimation } from "../hooks/useSubmitEstimation";
 import { EMPTY_ESTIMATION } from "../model/estimation-slice";
-import type { PhaseTypeMaster, Sector } from "../types/estimation";
+import type { Estimation, PhaseTypeMaster, Sector } from "../types/estimation";
 import { createEmptyEstimation } from "../utils/factories";
 import { CostItemsTable } from "./CostItemsTable";
 import { EmptyEstimationState } from "./EmptyEstimationState";
@@ -411,6 +412,67 @@ export function EstimationScreen({
     }
   }
 
+  /** After cost-item delete — refresh list and drop stale form/% when a function is emptied. */
+  function handleItemUpdated(updated: Estimation) {
+    replaceItem(updated);
+
+    if (!activeSectorId || !functionInvestmentTypeId) return;
+
+    const scoped = scopeEstimationToInvestmentType(
+      updated,
+      functionInvestmentTypeId,
+      activeSectorId,
+      {
+        includeLegacyNullFit: !outsourcingPartial,
+        functionName: activeSector.name || null,
+      },
+    );
+    const functionStillHasItems = scoped.blocks.some((block) =>
+      block.entityTabs.some((tab) => tab.steps.some(isStepPopulated)),
+    );
+    if (functionStillHasItems) return;
+
+    // Force empty-seed path: clear stale blocks/% and remount a blank create form.
+    seededEmptyFunctionRef.current = null;
+    setEditingExisting(false);
+    setModeOverride(null);
+    openedMineIdRef.current = null;
+
+    const latest = estimationRef.current;
+    const peerBlocks = latest.blocks.filter(
+      (block) => block.sectorId !== activeSectorId,
+    );
+    const electrificationPercentByEntity = {
+      ...(updated.electrificationPercentByEntity ??
+        latest.electrificationPercentByEntity ??
+        {}),
+    };
+    const percentageMasterIdByEntity = {
+      ...(updated.percentageMasterIdByEntity ??
+        latest.percentageMasterIdByEntity ??
+        {}),
+    };
+    for (const block of scoped.blocks) {
+      for (const tab of block.entityTabs) {
+        delete electrificationPercentByEntity[tab.entityId];
+        delete percentageMasterIdByEntity[tab.entityId];
+      }
+    }
+
+    dispatch({
+      type: "SET_ESTIMATION",
+      payload: {
+        ...latest,
+        ...(mineId ? { id: mineId, mine_id: mineId } : {}),
+        functionInvestmentTypeId,
+        electrificationPercentByEntity,
+        percentageMasterIdByEntity,
+        // No active-function block → empty-seed effect rebuilds a clean form.
+        blocks: peerBlocks,
+      },
+    });
+  }
+
   const lastBlockId = sectorBlocks[sectorBlocks.length - 1]?.id;
   // Submit: first-time create (single/multiple new cost items).
   // Update: only when returning via Edit after overall/table exists.
@@ -427,38 +489,20 @@ export function EstimationScreen({
 
   return (
     <OutsourcingPartialProvider value={outsourcingPartial}>
-      {outsourcingPartial && onEditOutsourcingConfig ? (
-        <OutsourcingConfigBanner
-          settings={outsourcingPartial}
-          onEdit={onEditOutsourcingConfig}
-        />
-      ) : null}
-      {loading && pageMode !== "form" ? (
-        <div className="flex flex-col items-center justify-center py-32">
-          <svg
-            className="h-10 w-10 animate-spin text-portal-purple"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-          >
-            <circle
-              className="opacity-25"
-              cx="12"
-              cy="12"
-              r="10"
-              stroke="currentColor"
-              strokeWidth="4"
-            />
-            <path
-              className="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-            />
-          </svg>
-          <p className="mt-4 text-sm text-gray-500">Loading estimations…</p>
-        </div>
-      ) : null}
+      <div
+        className="relative min-w-0"
+        aria-busy={loading && pageMode !== "form"}
+      >
+        {loading && pageMode !== "form" ? <LoadingOverlay /> : null}
+        {outsourcingPartial && onEditOutsourcingConfig ? (
+          <OutsourcingConfigBanner
+            settings={outsourcingPartial}
+            onEdit={onEditOutsourcingConfig}
+          />
+        ) : null}
+        {loading && pageMode !== "form" ? (
+          <div className="min-h-[12rem]" aria-hidden />
+        ) : null}
       {status === "error" && statusMessage ? (
         <Modal
           open
@@ -514,7 +558,7 @@ export function EstimationScreen({
             await refresh();
             await reloadMineFunctions();
           }}
-          onItemUpdated={replaceItem}
+          onItemUpdated={handleItemUpdated}
         />
       ) : sectorBlocks.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-sm text-gray-500">
@@ -536,6 +580,7 @@ export function EstimationScreen({
           />
         ))
       )}
+      </div>
     </OutsourcingPartialProvider>
   );
 }

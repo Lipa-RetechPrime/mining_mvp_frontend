@@ -6,6 +6,7 @@ import Link from "next/link";
 
 import { Button } from "@/shared/components/ui/Button";
 import { IconField } from "@/shared/components/ui/IconField";
+import { Loading } from "@/shared/components/ui/Loading";
 import { routes } from "@/shared/config/routes";
 
 import { useAuth } from "../hooks/use-auth";
@@ -86,8 +87,9 @@ export function LoginForm() {
           type="submit"
           disabled={submitting}
           className="mt-2 w-full"
+          aria-busy={submitting}
         >
-          {submitting ? "Signing in…" : "Sign in"}
+          {submitting ? <Loading compact /> : "Sign in"}
         </Button>
       </form>
     </div>
