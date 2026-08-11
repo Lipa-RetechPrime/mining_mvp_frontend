@@ -217,7 +217,7 @@ export function OverallCostTable({
                       title={subtotalInfoTitle}
                       aria-label={subtotalInfoTitle}
                     >
-                      <MaterialIcon name="info" size={14} />
+                      <MaterialIcon name="info" size={20}  className='text-[--color-portal-purple]'/>
                     </span>
                   </span>
                 ) : (
