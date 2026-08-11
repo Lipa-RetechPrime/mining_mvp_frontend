@@ -1,7 +1,8 @@
 // Export domain-neutral UI primitives from this module as they are introduced.
 export * from './Badge'
-export * from './Button'        
+export * from './Button'
 export * from './Input'
+export * from './Loading'
 export * from './MaterialIcon'
 export * from './Select'
 export * from './Textarea'

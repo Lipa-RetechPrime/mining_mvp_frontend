@@ -1,4 +1,5 @@
 import { Button } from '@/shared/components/ui/Button'
+import { Loading } from '@/shared/components/ui/Loading'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 
 export function CardFooter({
@@ -20,7 +21,6 @@ export function CardFooter({
   isEditing?: boolean
 }) {
   const primaryLabel = isEditing ? 'Update' : 'Submit'
-  const primaryBusy = isEditing ? 'Updating…' : 'Submitting…'
 
   return (
     <footer className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t border-portal-border pt-6">
@@ -39,8 +39,13 @@ export function CardFooter({
           + Add Cost Item
         </Button>
         {showSubmit && onSubmit ? (
-          <Button variant="primary" disabled={submitting} onClick={onSubmit}>
-            {submitting ? primaryBusy : primaryLabel}
+          <Button
+            variant="primary"
+            disabled={submitting}
+            onClick={onSubmit}
+            aria-busy={submitting}
+          >
+            {submitting ? <Loading compact /> : primaryLabel}
           </Button>
         ) : null}
       </div>
@@ -57,8 +62,13 @@ export function PageSubmitBar({
 }) {
   return (
     <div className="flex justify-end gap-3">
-      <Button variant="primary" disabled={submitting} onClick={onSubmit}>
-        {submitting ? 'Submitting…' : 'Submit'}
+      <Button
+        variant="primary"
+        disabled={submitting}
+        onClick={onSubmit}
+        aria-busy={submitting}
+      >
+        {submitting ? <Loading compact /> : 'Submit'}
       </Button>
     </div>
   )

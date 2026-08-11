@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { MaterialIcon } from '@/shared/components/ui/MaterialIcon'
 import { Input } from '@/shared/components/ui/Input'
 import { Button } from '@/shared/components/ui/Button'
+import { Loading } from '@/shared/components/ui/Loading'
 import { Modal } from '@/shared/components/ui/Modal'
 import { routes } from '@/shared/config/routes'
 import { formatLastUpdated, sortMinesByLastUpdated } from '@/shared/utils/mineList'
@@ -84,32 +85,7 @@ export default function ProjectsPage() {
   }
 
   if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <svg
-          className="h-10 w-10 animate-spin text-portal-purple"
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-          />
-          <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-          />
-        </svg>
-        <p className="mt-4 text-sm text-gray-500">Loading projects…</p>
-      </div>
-    )
+    return <Loading />
   }
 
   if (error) {
@@ -220,11 +196,7 @@ export default function ProjectsPage() {
                             Latest
                           </span>
                         ) : null}
-                        {isOpening ? (
-                          <span className="text-xs font-normal text-gray-500">
-                            Checking…
-                          </span>
-                        ) : null}
+                        {isOpening ? <Loading compact className="inline-flex" /> : null}
                       </div>
                     </td>
                     <td className="px-4 py-3.5 text-gray-600 sm:px-5">

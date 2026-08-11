@@ -16,6 +16,7 @@ import {
 } from '@/features/estimations/api/functionInvestmentType'
 import { Button } from '@/shared/components/ui/Button'
 import { Input } from '@/shared/components/ui/Input'
+import { Loading, LoadingOverlay } from '@/shared/components/ui/Loading'
 import type { PhaseTypeMaster } from '@/shared/types'
 import {
   createEmptyOutsourcingConfig,
@@ -504,8 +505,8 @@ export function OutsourcingPlaceholder({
 
   if (!hydrated) {
     return (
-      <div className="rounded-lg bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm ring-1 ring-gray-200/60">
-        Loading outsourcing configuration…
+      <div className="relative min-h-[12rem] rounded-lg bg-white shadow-sm ring-1 ring-gray-200/60">
+        <LoadingOverlay />
       </div>
     )
   }
@@ -775,12 +776,15 @@ export function OutsourcingPlaceholder({
           variant="primary"
           onClick={() => void handleSave()}
           disabled={saving}
+          aria-busy={saving}
         >
-          {saving
-            ? 'Saving…'
-            : onCancel
-              ? 'Save'
-              : 'Save & continue'}
+          {saving ? (
+            <Loading compact />
+          ) : onCancel ? (
+            'Save'
+          ) : (
+            'Save & continue'
+          )}
         </Button>
       </div>
     </div>

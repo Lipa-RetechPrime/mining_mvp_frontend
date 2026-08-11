@@ -35,7 +35,7 @@ export function GuestOnly({ children }: GuestOnlyProps) {
   }
 
   if (isAuthenticated) {
-    return <AuthStatusFallback message="Redirecting…" />;
+    return <AuthStatusFallback />;
   }
 
   return children;

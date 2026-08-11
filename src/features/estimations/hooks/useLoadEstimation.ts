@@ -141,10 +141,31 @@ export function useEstimationList(): UseEstimationListValue {
           ...(estimation.percentageMasterIdByEntity ?? {}),
         },
       };
+
+      // Drop stale design-% keys for entity tabs that no longer have cost items.
+      const electrificationPercentByEntity = {
+        ...(merged.electrificationPercentByEntity ?? {}),
+      };
+      const percentageMasterIdByEntity = {
+        ...(merged.percentageMasterIdByEntity ?? {}),
+      };
+      for (const block of estimation.blocks) {
+        for (const tab of block.entityTabs) {
+          if (tab.steps.some(isStepPopulated)) continue;
+          delete electrificationPercentByEntity[tab.entityId];
+          delete percentageMasterIdByEntity[tab.entityId];
+        }
+      }
+
+      const cleaned: Estimation = {
+        ...merged,
+        electrificationPercentByEntity,
+        percentageMasterIdByEntity,
+      };
       next[index] =
-        merged.phaseLimit == null && existing.phaseLimit != null
-          ? withMinePhaseLimit(merged, existing.phaseLimit)
-          : merged;
+        cleaned.phaseLimit == null && existing.phaseLimit != null
+          ? withMinePhaseLimit(cleaned, existing.phaseLimit)
+          : cleaned;
       return next;
     });
   }, []);
@@ -177,7 +198,7 @@ export function useEstimationList(): UseEstimationListValue {
         functionName?: string | null
       },
     ) => {
-      dispatch({ type: "SET_STATUS", status: "loading", message: "Loading…" })
+      dispatch({ type: "SET_STATUS", status: "loading", message: "" })
       const fromList = items.find(
         (item) => item.id === id || item.mine_id === id,
       )
