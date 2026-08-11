@@ -438,6 +438,10 @@ export function mapDtoToEstimation(dto: InvestmentDto): Estimation {
   const electrificationPercentByEntity: Record<string, number> = {}
   for (const entity of orderedEntities) {
     const entityId = entity.entity_id || entityIdFromName(entity.entity_name)
+    const hasCostItems = (entity.costItems ?? []).length > 0
+    // Keep design % only while the entity still has cost items — empty after
+    // delete must not resurface the previous % on the create form.
+    if (!hasCostItems) continue
     if (entity.percentage_master_id) {
       percentageMasterIdByEntity[entityId] = entity.percentage_master_id
     }
@@ -599,16 +603,30 @@ export function scopeEstimationToInvestmentType(
     block.entityTabs.some((tab) => tab.steps.some(isStepPopulated)),
   )
 
+  const electrificationPercentByEntity: Record<string, number> = {}
+  const percentageMasterIdByEntity: Record<string, string> = {}
+  if (hasPopulatedForFunction) {
+    const sourcePercent = estimation.electrificationPercentByEntity ?? {}
+    const sourceMaster = estimation.percentageMasterIdByEntity ?? {}
+    for (const block of scopedBlocks) {
+      for (const tab of block.entityTabs) {
+        if (!tab.steps.some(isStepPopulated)) continue
+        if (sourcePercent[tab.entityId] != null) {
+          electrificationPercentByEntity[tab.entityId] = sourcePercent[tab.entityId]
+        }
+        if (sourceMaster[tab.entityId]) {
+          percentageMasterIdByEntity[tab.entityId] = sourceMaster[tab.entityId]
+        }
+      }
+    }
+  }
+
   return {
     ...estimation,
     functionInvestmentTypeId: fitId,
-    // New / empty functions must not inherit another function's entity %.
-    electrificationPercentByEntity: hasPopulatedForFunction
-      ? estimation.electrificationPercentByEntity
-      : {},
-    percentageMasterIdByEntity: hasPopulatedForFunction
-      ? estimation.percentageMasterIdByEntity
-      : {},
+    // Never keep design % for empty entity tabs (delete → add must start blank).
+    electrificationPercentByEntity,
+    percentageMasterIdByEntity,
     blocks: scopedBlocks,
   }
 }

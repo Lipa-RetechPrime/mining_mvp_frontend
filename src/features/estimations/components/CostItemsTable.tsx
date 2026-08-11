@@ -513,12 +513,13 @@ function EstimationTableCard({
           {addingCostItems ? (
             <div className="mt-6 border-t border-portal-border pt-6">
               <CostItemsDraftForm
-                key={`${activeTab.entityId}-add`}
+                key={`${activeTab.entityId}-add-${emptyEntityDraftKey}`}
                 phaseTypes={phaseTypes}
                 blockId={block.id}
                 entityId={activeTab.entityId}
                 entityCode={activeTab.entityCode}
                 minePhaseLimit={estimation.phaseLimit}
+                formResetKey={emptyEntityDraftKey}
                 onSubmit={handleSaveSteps}
                 onCancel={() => setAddingCostItems(false)}
               />
@@ -533,6 +534,7 @@ function EstimationTableCard({
           entityId={activeTab.entityId}
           entityCode={activeTab.entityCode}
           minePhaseLimit={scopedEstimation.phaseLimit}
+          formResetKey={emptyEntityDraftKey}
           onSubmit={handleSaveSteps}
         />
       ) : null}

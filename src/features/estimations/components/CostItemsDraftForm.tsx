@@ -98,6 +98,7 @@ export function CostItemsDraftForm({
   entityId,
   entityCode,
   minePhaseLimit,
+  formResetKey = 0,
   onSubmit,
   onCancel,
 }: {
@@ -106,6 +107,8 @@ export function CostItemsDraftForm({
   entityId: string
   entityCode?: string
   minePhaseLimit: number | null | undefined
+  /** Bump after delete-empty so electrification starts blank. */
+  formResetKey?: number
   onSubmit: (
     steps: Step[],
     electrificationPercent: number | null,
@@ -155,6 +158,13 @@ export function CostItemsDraftForm({
   if (entityId !== prevEntityId) {
     setPrevEntityId(entityId)
     setPercent(null)
+  }
+
+  const [prevFormResetKey, setPrevFormResetKey] = useState(formResetKey)
+  if (formResetKey !== prevFormResetKey) {
+    setPrevFormResetKey(formResetKey)
+    setPercent(null)
+    setErrors({})
   }
 
   const [prevMinePhaseLimit, setPrevMinePhaseLimit] = useState(minePhaseLimit)
@@ -414,6 +424,7 @@ export function CostItemsDraftForm({
       </div>
       {showElectrificationInput ? (
         <ElectrificationPercentInput
+          key={`elec-${entityId}-${formResetKey}`}
           value={percent}
           entityCode={entityCode}
           error={errors[`electrificationPercent.${entityId}`]}

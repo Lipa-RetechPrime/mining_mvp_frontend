@@ -312,7 +312,12 @@ export function EstimationBlockView({
       {showElectrificationInput ? (
         <div className="mt-4">
           <ElectrificationPercentInput
-            value={estimation.electrificationPercentByEntity?.[tab.entityId]}
+            key={`elec-${tab.entityId}-${tab.steps.filter(isStepPopulated).length}`}
+            value={
+              tab.steps.some(isStepPopulated)
+                ? estimation.electrificationPercentByEntity?.[tab.entityId]
+                : null
+            }
             error={errors[`electrificationPercent.${tab.entityId}`]}
             entityCode={tab.entityCode}
             onChange={(percent) =>
