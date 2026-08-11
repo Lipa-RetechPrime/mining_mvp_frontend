@@ -436,7 +436,12 @@ export function EstimationScreen({
     seededEmptyFunctionRef.current = null;
     setEditingExisting(false);
     setModeOverride(null);
-    openedMineIdRef.current = null;
+    // Keep openKey so the open() effect does not reload API design-% onto the form.
+    openedMineIdRef.current = [
+      mineId || mineName || "",
+      functionInvestmentTypeId,
+      activeSectorId || "",
+    ].join(":");
 
     const latest = estimationRef.current;
     const peerBlocks = latest.blocks.filter(

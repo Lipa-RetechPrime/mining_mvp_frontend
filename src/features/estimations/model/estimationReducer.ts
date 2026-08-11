@@ -1,5 +1,6 @@
 import { computeAmount, computeAutomaticValue } from '../calculations/calculations'
 import { applyPhasePatch } from '../phases/phasePatch'
+import { isStepPopulated } from '../api/investments/domain'
 import { createEmptyBlock, createEmptyPhase, createEmptyStep } from '../utils/factories'
 import {
   DEFAULT_INITIAL_PHASE_COUNT,
@@ -349,37 +350,64 @@ export function estimationReducer(
           }),
         },
       }
-    case 'REMOVE_STEP':
+    case 'REMOVE_STEP': {
+      const nextBlocks = state.estimation.blocks.map((block) => {
+        if (block.id !== action.blockId) return block
+        return {
+          ...block,
+          entityTabs: block.entityTabs.map((tab) => {
+            if (tab.entityId !== action.entityId) return tab
+            // Always allow remove; if last item, replace with a fresh empty step.
+            if (tab.steps.length <= 1) {
+              const reset = createStepWithMinePhaseLimit(
+                state.estimation.phaseLimit ?? null,
+              )
+              reset.title = 'Cost Item 1'
+              return {
+                ...tab,
+                steps: [reset],
+                currentStepIndex: 0,
+              }
+            }
+            const steps = tab.steps.filter((s) => s.id !== action.stepId)
+            const currentStepIndex = Math.min(tab.currentStepIndex, steps.length - 1)
+            return { ...tab, steps, currentStepIndex: Math.max(0, currentStepIndex) }
+          }),
+        }
+      })
+
+      const entityStillPopulated = nextBlocks.some((block) =>
+        block.entityTabs.some(
+          (tab) =>
+            tab.entityId === action.entityId &&
+            tab.steps.some((step) => isStepPopulated(step)),
+        ),
+      )
+
+      const electrificationPercentByEntity = {
+        ...(state.estimation.electrificationPercentByEntity ?? {}),
+      }
+      const percentageMasterIdByEntity = {
+        ...(state.estimation.percentageMasterIdByEntity ?? {}),
+      }
+      if (!entityStillPopulated) {
+        delete electrificationPercentByEntity[action.entityId]
+        delete percentageMasterIdByEntity[action.entityId]
+      }
+
       return {
         ...state,
+        errors: clearErrors(state.errors, [
+          `electrificationPercent.${action.entityId}`,
+        ]),
         estimation: {
           ...state.estimation,
-          blocks: state.estimation.blocks.map((block) => {
-            if (block.id !== action.blockId) return block
-            return {
-              ...block,
-              entityTabs: block.entityTabs.map((tab) => {
-                if (tab.entityId !== action.entityId) return tab
-                // Always allow remove; if last item, replace with a fresh empty step.
-                if (tab.steps.length <= 1) {
-                  const reset = createStepWithMinePhaseLimit(
-                    state.estimation.phaseLimit ?? null,
-                  )
-                  reset.title = 'Cost Item 1'
-                  return {
-                    ...tab,
-                    steps: [reset],
-                    currentStepIndex: 0,
-                  }
-                }
-                const steps = tab.steps.filter((s) => s.id !== action.stepId)
-                const currentStepIndex = Math.min(tab.currentStepIndex, steps.length - 1)
-                return { ...tab, steps, currentStepIndex: Math.max(0, currentStepIndex) }
-              }),
-            }
-          }),
+          blocks: nextBlocks,
+          electrificationPercentByEntity,
+          percentageMasterIdByEntity,
         },
       }
+    }
     case 'SET_STEP_INDEX':
       return {
         ...state,
