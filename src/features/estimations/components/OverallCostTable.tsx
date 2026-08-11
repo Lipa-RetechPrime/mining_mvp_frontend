@@ -65,6 +65,11 @@ export function OverallCostTable({
   showFormulas?: boolean
 }) {
   const outsourcing = useOutsourcingPartial()
+  const subtotalInfoTitle = isPartialOutsourcing(outsourcing)
+    ? 'This value is the summation of all contributed and payback amounts in different phases'
+    : isFullOutsourcing(outsourcing)
+      ? 'This value is the summation of payback amounts in different phases'
+      : null
   const showActions = typeof onRequestDelete === 'function'
   const rawFullStart =
     isFullOutsourcing(outsourcing) && outsourcing.paybackStartPhase
@@ -198,9 +203,26 @@ export function OverallCostTable({
                     ? 'font-semibold uppercase'
                     : 'font-semibold text-gray-800'
                 }`}
-                title={row.details}
+                title={
+                  row.kind === 'subtotal' && subtotalInfoTitle
+                    ? undefined
+                    : row.details
+                }
               >
-                {row.details}
+                {row.kind === 'subtotal' && subtotalInfoTitle ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{row.details}</span>
+                    <span
+                      className="inline-flex shrink-0 text-gray-500 hover:text-[--color-portal-navy]"
+                      title={subtotalInfoTitle}
+                      aria-label={subtotalInfoTitle}
+                    >
+                      <MaterialIcon name="info" size={14} />
+                    </span>
+                  </span>
+                ) : (
+                  row.details
+                )}
               </td>
               <td className="border border-portal-border px-3 py-2 text-right tabular-nums text-gray-700">
                 {row.kind === 'item' || row.kind === 'subtotal'
