@@ -58,10 +58,6 @@ export function OverallCostTable({
   phaseLimit?: number | null
   /** When set, shows an Actions column with delete on cost-item rows (entity tabs). */
   onRequestDelete?: (costItemId: string) => void
-  /**
-   * Entity tabs only: show “Phase value × contributor %” and
-   * “Escalated remainder”. Overall tab keeps this off.
-   */
   showFormulas?: boolean
 }) {
   const outsourcing = useOutsourcingPartial()
@@ -127,6 +123,7 @@ export function OverallCostTable({
         phaseLimit,
       })
     }
+    
     return built
   }, [
     data,

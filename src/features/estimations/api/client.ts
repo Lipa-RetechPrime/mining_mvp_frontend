@@ -1,15 +1,16 @@
-/**
- * Browser base path. Default `/api` is proxied by next.config rewrites to the Nest backend
- * (same as the Vite `/api` → backend rewrite).
- * Override with NEXT_PUBLIC_API_URL only when calling the backend directly.
- */
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "/api";
+import {
+  isAxiosError,
+  type AxiosRequestConfig,
+} from "axios";
 
-export type FetchFromBackendOptions = Omit<RequestInit, "body"> & {
+import { apiClient, normalizeApiPath } from "@/shared/api/axios";
+
+export type FetchFromBackendOptions = {
+  method?: AxiosRequestConfig["method"];
   /** JSON body — serialized and sent with Content-Type: application/json */
   json?: unknown;
   body?: BodyInit | null;
+  headers?: AxiosRequestConfig["headers"];
 };
 
 export class BackendApiError extends Error {
@@ -50,7 +51,11 @@ function readErrorMessage(body: unknown): string | null {
   if (!body || typeof body !== "object") {
     if (typeof body === "string" && body.trim()) {
       // Avoid dumping huge HTML / RSC payloads into the UI.
-      if (body.length > 300 || body.includes("<!DOCTYPE") || body.includes("boundary:")) {
+      if (
+        body.length > 300 ||
+        body.includes("<!DOCTYPE") ||
+        body.includes("boundary:")
+      ) {
         return null;
       }
       return body;
@@ -60,7 +65,9 @@ function readErrorMessage(body: unknown): string | null {
 
   const record = body as { message?: unknown; error?: unknown };
   if (Array.isArray(record.message)) {
-    return record.message.filter((m) => typeof m === "string").join("\n") || null;
+    return (
+      record.message.filter((m) => typeof m === "string").join("\n") || null
+    );
   }
   if (typeof record.message === "string" && record.message.trim()) {
     if (isNextNotFoundPayload(record.message)) {
@@ -74,96 +81,114 @@ function readErrorMessage(body: unknown): string | null {
   return null;
 }
 
-function buildUrl(endpoint: string): string {
-  const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  return `${API_BASE_URL}${path}`;
+function toResponseHeaders(
+  headers: Record<string, unknown>,
+): Pick<Headers, "get"> {
+  return {
+    get(name: string) {
+      const value =
+        headers[name.toLowerCase()] ?? headers[name];
+      if (Array.isArray(value)) {
+        return value[0] ?? null;
+      }
+      return typeof value === "string" ? value : null;
+    },
+  };
 }
 
-function buildHeaders(
-  headers: HeadersInit | undefined,
-  hasJsonBody: boolean,
-): Headers {
-  const next = new Headers(headers);
-  if (hasJsonBody && !next.has("Content-Type")) {
-    next.set("Content-Type", "application/json");
+async function readBlobErrorBody(data: unknown): Promise<unknown> {
+  if (!(data instanceof Blob)) {
+    return data;
   }
-  if (!next.has("Accept")) {
-    next.set("Accept", "application/json");
-  }
-  return next;
-}
 
-async function readErrorBody(response: Response): Promise<unknown> {
-  const contentType = response.headers.get("content-type") ?? "";
   try {
-    if (contentType.includes("application/json")) {
-      return await response.json();
+    const text = await data.text();
+    if (!text) {
+      return undefined;
     }
-    const text = await response.text();
-    return text || undefined;
+
+    const contentType = data.type;
+    if (contentType.includes("application/json")) {
+      return JSON.parse(text);
+    }
+
+    return text;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Shared fetch helper for estimation / investments API calls.
+ * Shared request helper for estimation / investments API calls.
  */
 export async function fetchFromBackend<T>(
   endpoint: string,
   options: FetchFromBackendOptions = {},
 ): Promise<T> {
-  const { json, headers, body, ...rest } = options;
-  const hasJson = json !== undefined;
-  const response = await fetch(buildUrl(endpoint), {
-    ...rest,
-    headers: buildHeaders(headers, hasJson),
-    body: hasJson ? JSON.stringify(json) : body,
-  });
+  const { json, headers, body, method, ...rest } = options;
 
-  if (!response.ok) {
-    throw new BackendApiError(
-      response.status,
-      response.statusText,
-      await readErrorBody(response),
-    );
+  try {
+    const response = await apiClient.request<T>({
+      url: normalizeApiPath(endpoint),
+      method: method ?? "GET",
+      headers,
+      data: json !== undefined ? json : (body ?? undefined),
+      ...rest,
+    });
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = String(response.headers["content-type"] ?? "");
+    if (!contentType.includes("application/json")) {
+      return undefined as T;
+    }
+
+    return response.data;
+  } catch (error) {
+    if (isAxiosError(error) && error.response) {
+      throw new BackendApiError(
+        error.response.status,
+        error.response.statusText,
+        error.response.data,
+      );
+    }
+    throw error;
   }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    return undefined as T;
-  }
-
-  return (await response.json()) as T;
 }
 
 /** Binary download helper (e.g. Excel export). */
 export async function fetchBlobFromBackend(
   endpoint: string,
   options: FetchFromBackendOptions = {},
-): Promise<{ blob: Blob; headers: Headers }> {
-  const { json, headers, body, ...rest } = options;
-  const hasJson = json !== undefined;
-  const response = await fetch(buildUrl(endpoint), {
-    ...rest,
-    headers: buildHeaders(headers, hasJson),
-    body: hasJson ? JSON.stringify(json) : body,
-  });
+): Promise<{ blob: Blob; headers: Pick<Headers, "get"> }> {
+  const { json, headers, body, method, ...rest } = options;
 
-  if (!response.ok) {
-    throw new BackendApiError(
-      response.status,
-      response.statusText,
-      await readErrorBody(response),
-    );
+  try {
+    const response = await apiClient.request<Blob>({
+      url: normalizeApiPath(endpoint),
+      method: method ?? "GET",
+      headers,
+      data: json !== undefined ? json : (body ?? undefined),
+      responseType: "blob",
+      ...rest,
+    });
+
+    return {
+      blob: response.data,
+      headers: toResponseHeaders(
+        response.headers as Record<string, unknown>,
+      ),
+    };
+  } catch (error) {
+    if (isAxiosError(error) && error.response) {
+      throw new BackendApiError(
+        error.response.status,
+        error.response.statusText,
+        await readBlobErrorBody(error.response.data),
+      );
+    }
+    throw error;
   }
-
-  return {
-    blob: await response.blob(),
-    headers: response.headers,
-  };
 }
